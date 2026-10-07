@@ -304,4 +304,4 @@ Contributions are welcome.
 
 ---
 
-If you want, I can also produce a more minimal, more aggressive "hacker-style" README version or tighten this one further for a cleaner GitHub landing page.
+<3
