@@ -1,164 +1,307 @@
 # msxiv
 
-**Neo Simple Image Viewer for macOS** — A native Apple Silicon (M1/M2/M3/M4) port of [nsxiv](https://github.com/nsxiv/nsxiv), built with Swift and AppKit for maximum performance.
+[![Swift](https://img.shields.io/badge/Swift-5.9+-FA7343?style=flat-square&logo=swift)](https://swift.org)
+[![macOS](https://img.shields.io/badge/macOS-13+-000000?style=flat-square&logo=apple)](https://www.apple.com/macos)
+[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen.svg?style=flat-square)](https://www.wtfpl.net/)
+[![Status](https://img.shields.io/badge/status-active-brightgreen?style=flat-square)](https://github.com/superhexxxy/msxiv)
 
-## Features
+msxiv is a fast, keyboard-driven image viewer for macOS, inspired by nsxiv and implemented natively with Swift and AppKit.
 
-- **Blazing Fast**: Native Apple Silicon optimization with hardware-accelerated image decoding
-- **Two Modes**: Image mode and thumbnail grid mode
-- **Keyboard-Driven**: Vim-like keybindings (`h/j/k/l`, `w`, `r`, `t`, etc.)
-- **Zero Dependencies**: Pure Swift + macOS frameworks, no third-party libraries
-- **Scriptable**: External hooks for `key-handler`, `image-info`, `thumb-info`, and `win-title`
-- **Live Reload**: Automatically refreshes when the current image is modified
-- **EXIF Auto-Orientation**: Photos display with correct rotation
-- **Thumbnail Caching**: Disk-backed cache for instant subsequent loads
-- **File Marking**: Mark files with `x`, printed to stdout on quit
+It is optimized for Apple Silicon Macs and designed for users who prefer lightweight, scriptable tools with minimal overhead and a vim-like workflow.
+
+## Overview
+
+msxiv provides:
+
+- a native macOS image viewer
+- image mode and thumbnail-grid mode
+- fast keyboard navigation
+- configurable script hooks
+- file marking and selection workflows
+- automatic reload of modified images
+- minimal dependencies and no heavy runtime
+
+This project follows the same philosophy as classic Unix tools: small, fast, configurable, and focused on the task at hand.
+
+## Requirements
+
+The following software and system requirements are needed for msxiv to build and run correctly on macOS:
+
+### System
+
+- macOS 13 or newer
+- Apple Silicon recommended (M1/M2/M3/M4)
+- Xcode-compatible environment
+
+### Required packages
+
+Install the following on a Mac before building or running the project:
+
+- Xcode Command Line Tools
+  - provides `clang`, `make`, and the Swift toolchain
+  - install with:
+    ```bash
+    xcode-select --install
+    ```
+- Homebrew (recommended for installation and package management)
+  - install with:
+    ```bash
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    ```
+
+### Notes
+
+- No third-party runtime libraries are required for normal operation.
+- The app is built against Apple frameworks only: AppKit and the Swift standard library.
+- This project does not depend on Electron, GTK, or Qt.
 
 ## Installation
 
-### From Source
+### Build from source
 
 ```bash
-git clone https://github.com/yourusername/msxiv.git
+git clone https://github.com/superhexxxy/msxiv.git
 cd msxiv
 make
 sudo make install
-make install-config  # Optional: install example config
 ```
 
-### Via Homebrew
+Optional: install the example configuration file:
+
+```bash
+make install-config
+```
+
+### Install with Homebrew
 
 ```bash
 brew install --build-from-source ./msxiv.rb
 ```
 
-## Usage
+## Quick Start
+
+Open a directory of images:
 
 ```bash
-# View images in a directory
-msxiv ~/Pictures/vacation/
+msxiv ~/Pictures
+```
 
-# Start in thumbnail mode
-msxiv -t ~/Pictures/
+Open specific files:
 
-# View specific files
+```bash
 msxiv photo1.jpg photo2.png
 ```
 
-## Keybindings
+Open in thumbnail mode:
 
-### Image Mode
+```bash
+msxiv -t ~/Pictures
+```
 
-| Key | Action |
-|-----|--------|
-| `h/j/k/l` or arrows | Pan image |
-| `Left/Right/Space` | Previous/Next image |
-| `w` | Fit image to window |
-| `W` (Shift+w) | Fit window to image |
-| `f` | Toggle fullscreen |
-| `r` | Rotate 90° (view only) |
-| `R` (Shift+r) | Rotate 90° and save to disk |
-| `1` | Zoom to 100% (true pixels) |
-| `+/-` | Zoom in/out |
-| `s` | Slideshow on/off (`[` `]` adjust delay) |
-| `c` | Copy file path to clipboard |
-| `o` | Open in default app |
-| `x` | Mark/unmark file |
-| `t` | Toggle thumbnail mode |
-| `g/G` | Jump to first/last image |
-| `;` | Run `key-handler` script |
-| `d` then `y`/`n` (`Esc` cancels) | Delete file to Trash (with confirm) |
-| `q` | Quit |
+## Usage
 
-### Thumbnail Mode
+msxiv opens in image mode by default. Use the keyboard to navigate, zoom, and manipulate images.
 
-| Key | Action |
-|-----|--------|
-| `h/j/k/l` or arrows | Navigate grid |
-| `Return` | Open selected image |
-| `x` | Mark/unmark file |
-| `c` | Copy file path to clipboard |
-| `o` | Open in default app |
-| `d` then `y`/`n` (`Esc` cancels) | Delete file to Trash (with confirm) |
-| `t` | Back to image mode |
-| `f` | Toggle fullscreen |
-| `g/G` | Jump to first/last |
-| `q` | Quit |
+### Navigation
+
+- `h`, `j`, `k`, `l` or arrow keys: pan and navigate
+- `Space`, `Left`, `Right`: move between images
+- `g` / `G`: jump to the first or last image
+- `t`: toggle thumbnail mode
+- `f`: toggle fullscreen
+- `q`: quit
+
+### Zoom and viewing
+
+- `w`: fit image to window
+- `W`: fit window to image
+- `1`: view at 100% zoom
+- `+` / `-`: zoom in or out
+- `r`: rotate in view
+- `R`: rotate and save to disk
+
+### File operations
+
+- `c`: copy file path to clipboard
+- `o`: open the current file in the default app
+- `x`: mark or unmark a file
+- `d` then `y` or `n`: move file to Trash with confirmation
+- `;`: run the configured key-handler script
+
+### Slideshow
+
+- `s`: toggle slideshow
+- `[` / `]`: adjust slideshow delay
 
 ## Configuration
 
-Edit `~/.config/msxiv/config`:
+The example configuration is installed to:
+
+```bash
+~/.config/msxiv/config
+```
+
+Example:
 
 ```ini
 thumbnail_size = 128
 zoom_increment = 1.25
 background_color = #282828
 status_bar = true
-sort_by = name          # name | date | size
-recursive = false       # scan subdirectories
-slideshow_delay = 3.0   # seconds (0.5 - 30)
+sort_by = name
+recursive = false
+slideshow_delay = 3.0
 ```
 
 ## Script Hooks
 
-Create executable scripts in `~/.config/msxiv/`:
+Scripts can be placed in:
 
-### `key-handler`
+```bash
+~/.config/msxiv/
+```
 
-Triggered by `;` key. Receives file paths on stdin.
+### key-handler
+
+Triggered by the `;` key and receives file paths through stdin.
 
 ```bash
 #!/bin/sh
 while read file; do
-  case "$1" in
-    default) 
-      # Example: open in Preview
-      open -a "Preview" "$file"
-      ;;
-  esac
+  open -a "Preview" "$file"
 done
 ```
 
-### `image-info`
+### image-info
 
-Output is displayed in the status bar.
+Displays additional image information in the status bar.
 
 ```bash
 #!/bin/sh
 file="$1"
-size=$(stat -f%z "$file")
+size=$(stat -f%z "$file" 2>/dev/null)
 echo "$(basename "$file") - $((size / 1024))KB"
 ```
 
-### `thumb-info`
+### thumb-info
 
-Output is displayed below each thumbnail.
+Displays metadata under each thumbnail.
 
 ```bash
 #!/bin/sh
 echo "$(basename "$1")"
 ```
 
-### `win-title`
+### win-title
 
-Output sets the window title.
+Sets the window title for the current image.
 
 ```bash
 #!/bin/sh
 echo "VIEWING: $(basename "$1")"
 ```
 
-## Performance
+## Development
 
-- **M4 Apple Silicon**: Hardware-accelerated decoding via ImageIO
-- **Large Directories**: Lazy thumbnail loading with visible-rect culling
-- **Memory Efficient**: Automatic cache trimming under memory pressure
-- **120Hz ProMotion**: Smooth panning and zooming on compatible displays
+### Build
+
+```bash
+make
+```
+
+### Clean build artifacts
+
+```bash
+make clean
+```
+
+### Package layout
+
+```text
+msxiv/
+├── Sources/msxiv/           # Swift implementation
+├── Package.swift            # Swift package manifest
+├── Makefile                 # Build and install targets
+├── install.sh               # Installation helper
+├── update.sh                # Update helper
+├── config.example           # Example config
+├── msxiv.rb                 # Homebrew formula
+├── README.md                # Project documentation
+├── .gitignore
+└── LICENSE
+```
+
+## Technical Notes
+
+- Language: Swift
+- Framework: AppKit
+- Build system: Swift Package Manager
+- Platform: macOS 13+
+- Runtime environment: native macOS
+- Dependencies: Apple system frameworks only
+
+## Troubleshooting
+
+### `msxiv: command not found`
+
+Verify the install path is in your shell PATH:
+
+```bash
+echo $PATH
+```
+
+Typical locations:
+
+- Apple Silicon: `/opt/homebrew/bin`
+- Intel: `/usr/local/bin`
+
+Then reinstall:
+
+```bash
+make install
+```
+
+### Config not applying
+
+Check the active config:
+
+```bash
+cat ~/.config/msxiv/config
+```
+
+Restart the application after making changes.
+
+### Build failures
+
+Ensure Xcode Command Line Tools are installed:
+
+```bash
+xcode-select --install
+swift --version
+```
 
 ## License
 
-GPL-2.0-or-later — Same as nsxiv
+This project is licensed under the DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE (WTFPL).
+
+See [LICENSE](LICENSE) for the full text.
 
 ## Credits
 
-Inspired by [nsxiv](https://github.com/nsxiv/nsxiv) and the suckless philosophy.
+- Inspired by [nsxiv](https://github.com/nsxiv/nsxiv)
+- Built natively for macOS using Swift and AppKit
+- Designed around a minimal, high-performance, keyboard-driven workflow
+
+## Contributing
+
+Contributions are welcome.
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Commit and push
+5. Open a pull request
+
+---
+
+If you want, I can also produce a more minimal, more aggressive "hacker-style" README version or tighten this one further for a cleaner GitHub landing page.
