@@ -1,0 +1,13 @@
+# msxiv configuration file
+# Location: ~/.config/msxiv/config
+
+thumbnail_size = 128
+zoom_increment = 1.25
+background_color = #282828
+status_bar = true
+# Sort order: name | date | size
+sort_by = name
+# Scan directories recursively
+recursive = false
+# Slideshow delay in seconds (0.5 - 30)
+slideshow_delay = 3.0
