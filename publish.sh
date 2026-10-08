@@ -145,12 +145,18 @@ cd - >/dev/null
 
 # --- 8. Test install exactly as users get it -----------------------------------
 # Homebrew only installs formulae that live in a tap, so tap first, then
-# install by tap name. (Uninstall first if a previous msxiv exists.)
+# install by tap name. A stale manual binary (e.g. from `make install`)
+# would block `brew link`, so back it up out of the way first.
 say "Testing tap install from source ..."
 brew tap "$GHUSER/tap" 2>/dev/null || true
 # An already-tapped checkout goes stale — pull it, or this installs yesterday's formula.
 git -C "$(brew --repository)/Library/Taps/$GHUSER/homebrew-tap" pull --ff-only >/dev/null 2>&1 \
   || brew update >/dev/null 2>&1 || true
+BREWBIN="$(brew --prefix)/bin/msxiv"
+if [ -e "$BREWBIN" ] && [ ! -L "$BREWBIN" ]; then
+  mv "$BREWBIN" "$BREWBIN.pre-brew-backup"
+  echo "  moved your manual install to $BREWBIN.pre-brew-backup"
+fi
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
 brew install --build-from-source "$GHUSER/tap/msxiv"
 "$(brew --prefix)/bin/msxiv" -h >/dev/null 2>&1 && echo "  smoke test OK"
