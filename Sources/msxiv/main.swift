@@ -95,11 +95,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         slideshowTimer?.invalidate()
         slideshowTimer = nil
         fileWatcher?.stop()
+        // Remove the local event monitor: leaving it installed past teardown
+        // is harmless for a quitting app, but stopping cleanly keeps symmetry
+        // with installQuitGuard() and avoids surprises if the run loop is ever
+        // restarted in-process.
+        if let keyMonitor = keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
         if let store = imageStore, !store.markedFiles.isEmpty {
             for file in store.markedFiles.sorted(by: { $0.path < $1.path }) {
                 print(file.path)
             }
         }
+        try? FileHandle.standardOutput.synchronizeFile()
         return .terminateNow
     }
     
@@ -146,8 +155,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     /// Token invalidates stale async decodes when the user navigates fast.
     private var loadToken: UInt64 = 0
-    /// One-step lookahead cache: pressing next shows instantly.
-    private var prefetched: (index: Int, url: URL, image: CGImage?)?
+    /// Lookahead/behind cache: pressing next/prev shows instantly. Keyed by
+    /// index+URL so a shifted list (delete) can never serve a wrong image.
+    private var prefetchCache: [Int: (url: URL, image: CGImage?)] = [:]
 
     func loadImage() {
         guard let url = imageStore.currentFile else { return }
@@ -159,12 +169,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.loadImage()
         }
 
-        // Fast path: the prefetch already decoded this exact file.
-        if let p = prefetched, p.index == index, p.url == url {
-            prefetched = nil
+        // Fast path: the prefetch already decoded this exact file. On a hit,
+        // re-kick the lookahead window so continuous browsing stays instant.
+        if let p = prefetchCache[index], p.url == url {
+            prefetchCache[index] = nil
             applyLoadedImage(p.image, url: url, token: token)
+            updatePrefetchWindow(around: index)
             return
         }
+
+        // Drop any stale entry for this slot (e.g. prefetched before a
+        // delete shifted the list) so it can't be served later.
+        prefetchCache[index] = nil
 
         // Decode off the main thread so the UI stays responsive on huge images.
         DispatchQueue.global(qos: .userInteractive).async {
@@ -174,7 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.applyLoadedImage(cgImage, url: url, token: token)
             }
         }
-        prefetchNext(after: index)
+        updatePrefetchWindow(around: index)
     }
 
     private func applyLoadedImage(_ cgImage: CGImage?, url: URL, token: UInt64) {
@@ -196,22 +212,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Decode the neighbouring image in the background (nsxiv-style prefetch).
-    private func prefetchNext(after index: Int) {
-        let next = index + 1
-        guard next < imageStore.files.count else { return }
-        let url = imageStore.files[next]
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else { return }
-            let img = ImageLoader.load(from: url)
-            DispatchQueue.main.async {
-                // Only keep it if we're still looking at the predecessor.
-                if self.imageStore.currentIndex == index {
-                    self.prefetched = (next, url, img)
+    /// Decode the neighbouring images in the background (nsxiv-style prefetch):
+    /// both directions, so reversing course is just as instant as advancing.
+    /// In-flight slots are tracked so repeated calls for the same window never
+    /// spawn duplicate decodes; stale results are dropped on completion.
+    private func updatePrefetchWindow(around index: Int) {
+        let files = imageStore.files
+        // Forget in-flight slots from a previous window: if they still decode,
+        // their completion will fail the freshness check and be discarded.
+        prefetchInFlight.removeAll()
+
+        for n in [index - 1, index + 1] {
+            guard n >= 0, n < files.count else { continue }
+            guard prefetchCache[n] == nil, !prefetchInFlight.contains(n) else { continue }
+            let url = files[n]
+            prefetchInFlight.insert(n)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self = self else { return }
+                let img = ImageLoader.load(from: url)
+                DispatchQueue.main.async {
+                    self.prefetchInFlight.remove(n)
+                    // Keep it only while we're still viewing one of its
+                    // neighbors and nobody filled this slot meanwhile.
+                    let cur = self.imageStore.currentIndex
+                    if abs(cur - n) <= 1, self.prefetchCache[n] == nil,
+                       n < self.imageStore.files.count, self.imageStore.files[n] == url {
+                        self.prefetchCache[n] = (url, img)
+                    }
                 }
             }
         }
     }
+    private var prefetchInFlight: Set<Int> = []
     
     func updateImageInfo() {
         guard let url = imageStore.currentFile, let img = window.imageView.image else { return }
@@ -391,27 +423,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         imageStore.files.remove(at: index)
         imageStore.markedFiles.remove(url)
         clearDeletePrompt()
-        // A decode of the deleted file may still be in flight; drop it.
-        prefetched = nil
+        // Any decode of the deleted file may still be in flight; drop the
+        // whole prefetch window and re-key it against the shifted list below.
+        prefetchCache.removeAll()
+        prefetchInFlight.removeAll()
 
         if imageStore.files.isEmpty {
             fileWatcher.stop()
             NSApp.terminate(nil)
             return
         }
-        imageStore.currentIndex = min(imageStore.currentIndex, imageStore.files.count - 1)
+
+        // All indices at/after the deleted slot shift down by one; clamp to
+        // the new end. Keep the thumbnail selection consistent with the store
+        // in *both* modes (previously only image mode synced them, so after a
+        // delete in grid mode the two views could point at different files).
+        let newIndex = min(index, imageStore.files.count - 1)
+        imageStore.currentIndex = newIndex
+
+        window.thumbnailView.files = imageStore.files
+        window.thumbnailView.markedFiles = imageStore.markedFiles
+        window.thumbnailView.selectedIndex = newIndex
+
+        let total = imageStore.files.count
+        let marked = imageStore.markedFiles.count
+        window.thumbnailView.defaultInfo = "[\(newIndex + 1)/\(total)] \(marked) marked"
+        window.thumbnailView.didDeleteFiles()
 
         if window.currentMode == .thumbnail {
-            window.thumbnailView.files = imageStore.files
-            window.thumbnailView.markedFiles = imageStore.markedFiles
-            window.thumbnailView.selectedIndex = min(window.thumbnailView.selectedIndex, imageStore.files.count - 1)
-            let total = imageStore.files.count
-            let marked = imageStore.markedFiles.count
-            window.thumbnailView.defaultInfo = "[\(window.thumbnailView.selectedIndex + 1)/\(total)] \(marked) marked"
-            window.thumbnailView.didDeleteFiles()
             window.title = "msxiv - thumbnails (\(total) images)"
         } else {
-            window.thumbnailView.selectedIndex = imageStore.currentIndex
             loadImage()
         }
     }

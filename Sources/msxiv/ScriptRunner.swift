@@ -6,24 +6,33 @@ class ScriptRunner {
             .appendingPathComponent(".config/msxiv/key-handler").path
         
         guard FileManager.default.isExecutableFile(atPath: scriptPath) else { return }
-        
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = [scriptPath, action]
-        
-        let pipe = Pipe()
-        process.standardInput = pipe
-        
-        do {
-            try process.run()
-            let input = files.map { $0.path }.joined(separator: "\n")
-            if let data = input.data(using: .utf8) {
-                pipe.fileHandleForWriting.write(data)
+
+        // Never block the main thread on `waitUntilExit()`: a slow or hung
+        // user script would freeze the UI. Run on a background queue; these
+        // handlers are fire-and-forget (stdin-only, no stdout consumed).
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [scriptPath, action]
+
+            let pipe = Pipe()
+            process.standardInput = pipe
+            // Don't let a handler that writes lots of stdout deadlock on a
+            // full pipe buffer nobody is draining.
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                let input = files.map { $0.path }.joined(separator: "\n")
+                if let data = input.data(using: .utf8) {
+                    pipe.fileHandleForWriting.write(data)
+                }
+                pipe.fileHandleForWriting.closeFile()
+                process.waitUntilExit()
+            } catch {
+                print("msxiv: failed to run key-handler: \(error)")
             }
-            pipe.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
-        } catch {
-            print("msxiv: failed to run key-handler: \(error)")
         }
     }
     
