@@ -142,7 +142,9 @@ git push -u origin main 2>/dev/null || git push origin main
 cd - >/dev/null
 
 # --- 8. Test install exactly as users get it -----------------------------------
+# (Uninstall first if a previous msxiv exists — brew refuses to install over one.)
 say "Testing bottled-from-source install ..."
+brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
 brew install --build-from-source "$TAPDIR/Formula/msxiv.rb"
 "$(brew --prefix)/bin/msxiv" -h >/dev/null 2>&1 && echo "  smoke test OK"
 brew test msxiv 2>/dev/null || echo "  (brew test skipped — formula not from tap yet)"
@@ -150,7 +152,15 @@ brew audit --strict --new msxiv 2>/dev/null || echo "  warning: brew audit nits 
 brew uninstall msxiv
 
 # --- 9. Final install from the tap ----------------------------------------------
+# A non-brew binary (e.g. from `make install`) would block `brew link`,
+# so back it up out of the way first.
 say "Installing from tap ..."
+BREWBIN="$(brew --prefix)/bin/msxiv"
+if [ -e "$BREWBIN" ] && [ ! -L "$BREWBIN" ]; then
+  mv "$BREWBIN" "$BREWBIN.pre-brew-backup"
+  echo "  moved your manual install to $BREWBIN.pre-brew-backup"
+fi
+brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
 brew tap "$USER/tap" 2>/dev/null || true
 brew install msxiv
 msxiv -h >/dev/null 2>&1 && echo "  msxiv installed and working"
