@@ -557,24 +557,25 @@
             <h3>from source</h3>
             <div class="code-block" data-copy-all="git clone https://github.com/superhexxxy/msxiv.git
 cd msxiv
-make
-sudo make install">
+./install.sh">
                 <div class="code-line"><span class="cmd">git clone</span> https://github.com/superhexxxy/msxiv.git</div>
                 <div class="code-line"><span class="cmd">cd</span> msxiv</div>
-                <div class="code-line"><span class="cmd">make</span></div>
-                <div class="code-line"><span class="cmd">sudo make</span> install</div>
+                <div class="code-line"><span class="cmd">./install.sh</span></div>
                 <button class="copy-btn" title="copy all">
                     <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
                 </button>
             </div>
 
             <h3>via homebrew</h3>
-            <div class="code-block" data-copy-all="brew install --build-from-source ./msxiv.rb">
-                <div class="code-line"><span class="cmd">brew install</span> <span class="flag">--build-from-source</span> ./msxiv.rb</div>
+            <div class="code-block" data-copy-all="brew tap superhexxxy/tap
+brew install msxiv">
+                <div class="code-line"><span class="cmd">brew tap</span> superhexxxy/tap</div>
+                <div class="code-line"><span class="cmd">brew install</span> msxiv</div>
                 <button class="copy-btn" title="copy">
                     <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
                 </button>
             </div>
+            <p style="font-size:12px;">then set up the config: <code style="color:var(--pink)">mkdir -p ~/.config/msxiv && cp /opt/homebrew/etc/msxiv/config ~/.config/msxiv/config</code></p>
 
             <h3>optional: config</h3>
             <div class="code-block" data-copy-all="make install-config">

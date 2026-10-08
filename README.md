@@ -61,26 +61,31 @@ Install the following on a Mac before building or running the project:
 
 ## Installation
 
+### Install with Homebrew (recommended)
+
+```bash
+brew tap superhexxxy/tap
+brew install msxiv
+```
+
+Then set up the example configuration:
+
+```bash
+mkdir -p ~/.config/msxiv
+cp /opt/homebrew/etc/msxiv/config ~/.config/msxiv/config
+```
+
 ### Build from source
 
 ```bash
 git clone https://github.com/superhexxxy/msxiv.git
 cd msxiv
-make
-sudo make install
+./install.sh
 ```
 
-Optional: install the example configuration file:
-
-```bash
-make install-config
-```
-
-### Install with Homebrew
-
-```bash
-brew install --build-from-source ./msxiv.rb
-```
+This builds the release binary, installs it, and sets up the example config
+unless one already exists. See `./install.sh --help` for options
+(custom prefix, config handling, uninstall).
 
 ## Quick Start
 
