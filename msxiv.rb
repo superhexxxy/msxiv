@@ -3,7 +3,7 @@ class Msxiv < Formula
   homepage "https://github.com/yourusername/msxiv"
   url "https://github.com/yourusername/msxiv/archive/refs/tags/v1.0.0.tar.gz"
   sha256 "REPLACE_WITH_ACTUAL_SHA256"
-  license "GPL-2.0-or-later"
+  license "WTFPL"
   head "https://github.com/yourusername/msxiv.git", branch: "main"
 
   bottle do
