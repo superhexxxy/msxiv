@@ -38,15 +38,21 @@ class ImageStore {
             }
         }
 
+        // Schwartzian transform: precompute each file's sort key with one
+        // cheap `stat` per file (O(n) syscalls), then sort the cached pairs.
+        // The old comparator re-queried FileManager attributes on every
+        // compare — O(2·n log n) syscalls + NSDictionary allocations.
         switch sortBy {
         case "date":
-            self.files = tempFiles.sorted {
-                modDate(of: $0) < modDate(of: $1)
-            }
+            self.files = tempFiles
+                .map { (url: $0, key: ImageStore.statInfo(of: $0).date) }
+                .sorted { $0.key < $1.key }
+                .map { $0.url }
         case "size":
-            self.files = tempFiles.sorted {
-                fileSize(of: $0) < fileSize(of: $1)
-            }
+            self.files = tempFiles
+                .map { (url: $0, key: ImageStore.statInfo(of: $0).size) }
+                .sorted { $0.key < $1.key }
+                .map { $0.url }
         default:
             // Alphabetical by filename (locale-aware, matching nsxiv behavior)
             self.files = tempFiles.sorted {
@@ -55,12 +61,25 @@ class ImageStore {
         }
     }
 
-    private func modDate(of url: URL) -> Date {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? .distantPast
-    }
+    /// One raw `stat()` per file. Keys are precomputed once (O(n) syscalls),
+    /// then the sort compares cached values — no filesystem traffic inside
+    /// the comparator, which previously ran O(2·n log n) heavy
+    /// FileManager.attributesOfItem calls (each allocating an NSDictionary).
+    private struct StatInfo { let date: Date; let size: UInt64 }
 
-    private func fileSize(of url: URL) -> UInt64 {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
+    private static func statInfo(of url: URL) -> StatInfo {
+        var s = stat()
+        guard stat(url.path, &s) == 0 else {
+            return StatInfo(date: .distantPast, size: 0)
+        }
+        #if os(macOS)
+        let mtime = Date(timeIntervalSince1970: TimeInterval(s.st_mtimespec.tv_sec)
+                         + TimeInterval(s.st_mtimespec.tv_nsec) * 1e-9)
+        #else
+        let mtime = Date(timeIntervalSince1970: TimeInterval(s.st_mtim.tv_sec)
+                         + TimeInterval(s.st_mtim.tv_nsec) * 1e-9)
+        #endif
+        return StatInfo(date: mtime, size: UInt64(max(0, s.st_size)))
     }
     
     var currentFile: URL? {

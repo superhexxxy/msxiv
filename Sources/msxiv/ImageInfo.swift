@@ -30,15 +30,50 @@ struct ImageInfo {
             let day = raw.split(separator: " ").first.map(String.init) ?? raw
             return day.replacingOccurrences(of: ":", with: "-")
         }
-        if let mod = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            return f.string(from: mod)
+        if let mod = ImageInfo.modDate(of: url) {
+            return ImageInfo.cachedDateString(from: mod)
         }
         return nil
     }
 
+    /// Cached DateFormatter (creating one costs ~50µs; the old code built a
+    /// fresh instance on every call) + memoized result per modification time.
+    private static let dateCacheLock = NSLock()
+    private static var dateFormatter: DateFormatter?
+    private static var dateStringCache: [TimeInterval: String] = [:]
+
+    private static func cachedDateString(from date: Date) -> String {
+        let key = date.timeIntervalSince1970
+        dateCacheLock.lock()
+        defer { dateCacheLock.unlock() }
+        if let s = dateStringCache[key] { return s }
+        if dateFormatter == nil {
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            dateFormatter = f
+        }
+        let s = dateFormatter!.string(from: date)
+        if dateStringCache.count > 2048 { dateStringCache.removeAll() }
+        dateStringCache[key] = s
+        return s
+    }
+
+    /// Cheap mtime lookup via raw stat instead of attributesOfItem.
+    static func modDate(of url: URL) -> Date? {
+        var s = stat()
+        guard stat(url.path, &s) == 0 else { return nil }
+        #if os(macOS)
+        return Date(timeIntervalSince1970: TimeInterval(s.st_mtimespec.tv_sec)
+                    + TimeInterval(s.st_mtimespec.tv_nsec) * 1e-9)
+        #else
+        return Date(timeIntervalSince1970: TimeInterval(s.st_mtim.tv_sec)
+                    + TimeInterval(s.st_mtim.tv_nsec) * 1e-9)
+        #endif
+    }
+
     static func fileSize(for url: URL) -> UInt64? {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64)
+        var s = stat()
+        guard stat(url.path, &s) == 0 else { return nil }
+        return UInt64(max(0, s.st_size))
     }
 }

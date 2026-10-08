@@ -120,8 +120,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             self.imageStore.currentIndex = index
             self.imageStore.toggleMark()
+            // markedFiles.didSet coalesces the redraw itself.
             self.window.thumbnailView.markedFiles = self.imageStore.markedFiles
-            self.window.thumbnailView.needsDisplay = true
         }
         window.thumbnailView.onQuit = { NSApp.terminate(nil) }
         
@@ -144,9 +144,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - Image Mode
     
+    /// Token invalidates stale async decodes when the user navigates fast.
+    private var loadToken: UInt64 = 0
+    /// One-step lookahead cache: pressing next shows instantly.
+    private var prefetched: (index: Int, url: URL, image: CGImage?)?
+
     func loadImage() {
         guard let url = imageStore.currentFile else { return }
-        if let cgImage = ImageLoader.load(from: url) {
+        let index = imageStore.currentIndex
+        let token = { loadToken += 1; return loadToken }()
+
+        // Start watching this file for modifications
+        fileWatcher.watch(file: url) { [weak self] in
+            self?.loadImage()
+        }
+
+        // Fast path: the prefetch already decoded this exact file.
+        if let p = prefetched, p.index == index, p.url == url {
+            prefetched = nil
+            applyLoadedImage(p.image, url: url, token: token)
+            return
+        }
+
+        // Decode off the main thread so the UI stays responsive on huge images.
+        DispatchQueue.global(qos: .userInteractive).async {
+            let cgImage = ImageLoader.load(from: url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.loadToken == token else { return }
+                self.applyLoadedImage(cgImage, url: url, token: token)
+            }
+        }
+        prefetchNext(after: index)
+    }
+
+    private func applyLoadedImage(_ cgImage: CGImage?, url: URL, token: UInt64) {
+        guard loadToken == token else { return }
+        if let cgImage = cgImage {
             window.imageView.image = cgImage
             window.imageView.zoom = 1.0
             window.imageView.offset = .zero
@@ -157,14 +190,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.fitWindowToImage(cgImage)
             updateImageInfo()
             runImageScripts(for: url)
-
-            // Start watching this file for modifications
-            fileWatcher.watch(file: url) { [weak self] in
-                self?.loadImage()
-            }
         } else {
             window.imageView.image = nil
             window.title = "msxiv - (failed to load \(url.lastPathComponent))"
+        }
+    }
+
+    /// Decode the neighbouring image in the background (nsxiv-style prefetch).
+    private func prefetchNext(after index: Int) {
+        let next = index + 1
+        guard next < imageStore.files.count else { return }
+        let url = imageStore.files[next]
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let img = ImageLoader.load(from: url)
+            DispatchQueue.main.async {
+                // Only keep it if we're still looking at the predecessor.
+                if self.imageStore.currentIndex == index {
+                    self.prefetched = (next, url, img)
+                }
+            }
         }
     }
     
@@ -183,7 +228,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             dateTaken: ImageInfo.photoDate(for: url),
             slideshow: slideshow
         )
-        window.imageView.needsDisplay = true
+        // defaultInfo.didSet already marks the view dirty.
     }
 
     /// Flash a transient message in the status bar (auto-clears after 1.5s
@@ -192,13 +237,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let url = imageStore.currentFile else { return }
         let path = url.path
         window.imageView.statusInfo = text
-        window.imageView.needsDisplay = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self = self,
                   self.imageStore.currentFile?.path == path,
                   self.window.imageView.statusInfo == text else { return }
             self.window.imageView.statusInfo = nil
-            self.window.imageView.needsDisplay = true
         }
     }
     
@@ -212,8 +255,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Image Info
         ScriptRunner.runScript(name: "image-info", arguments: [url.path]) { [weak self] output in
             guard let self = self else { return }
-            self.window.imageView.statusInfo = output
-            self.window.imageView.needsDisplay = true
+            // statusInfo is nil unless a transient flash is active; only
+            // assign when the script produced something (didSet would mark
+            // the whole view dirty on every nil->nil assignment otherwise).
+            if let output = output, self.window.imageView.statusInfo == nil {
+                self.window.imageView.statusInfo = output
+            }
         }
     }
     
@@ -344,6 +391,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         imageStore.files.remove(at: index)
         imageStore.markedFiles.remove(url)
         clearDeletePrompt()
+        // A decode of the deleted file may still be in flight; drop it.
+        prefetched = nil
 
         if imageStore.files.isEmpty {
             fileWatcher.stop()
