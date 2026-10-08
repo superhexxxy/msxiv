@@ -7,7 +7,6 @@ class Msxiv < Formula
   head "https://github.com/superhexxxy/msxiv.git", branch: "main"
 
 
-  depends_on xcode: ["14.0", :build]
   depends_on macos: :ventura
 
   def install

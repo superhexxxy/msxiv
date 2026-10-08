@@ -10,7 +10,7 @@
 #   (Xcode CLT already provides swift/make)
 set -eu
 
-USER="superhexxxy"
+GHUSER="superhexxxy"
 REPO="msxiv"
 VERSION="${1:-v1.0.0}"
 TAPREPO="homebrew-tap"
@@ -28,10 +28,10 @@ command -v brew >/dev/null 2>&1 || { echo "error: brew not found" >&2; exit 1; }
 # --- 1. Brand files with real username ---------------------------------------
 # Explicit file list only: never recursive (would touch .git) and never this
 # script itself (would rewrite its own branding logic on macOS/BSD grep).
-say "Branding files as $USER ..."
+say "Branding files as $GHUSER ..."
 for f in msxiv.rb README.md; do
   if [ -f "$f" ] && grep -q "yourusername" "$f" 2>/dev/null; then
-    sed -i '' "s/yourusername/$USER/g" "$f"
+    sed -i '' "s/yourusername/$GHUSER/g" "$f"
     echo "  updated ./$f"
   fi
 done
@@ -53,7 +53,7 @@ fi
 say "Committing and pushing $REPO ..."
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || git init -b main
 git remote get-url origin >/dev/null 2>&1 \
-  || git remote add origin "https://github.com/$USER/$REPO.git"
+  || git remote add origin "https://github.com/$GHUSER/$REPO.git"
 git add -A
 if git diff --cached --quiet; then
   echo "  nothing new to commit"
@@ -70,16 +70,16 @@ git push origin "$VERSION"
 
 # --- 4. GitHub release --------------------------------------------------------
 say "Creating GitHub release $VERSION ..."
-if gh release view "$VERSION" --repo "$USER/$REPO" >/dev/null 2>&1; then
+if gh release view "$VERSION" --repo "$GHUSER/$REPO" >/dev/null 2>&1; then
   echo "  release $VERSION already exists"
 else
-  gh release create "$VERSION" --repo "$USER/$REPO" \
+  gh release create "$VERSION" --repo "$GHUSER/$REPO" \
     --title "$REPO $VERSION" --generate-notes
 fi
 
 # --- 5. Tarball sha256 (retry: GitHub needs a moment) ------------------------
 say "Waiting for release tarball ..."
-TARBALL_URL="https://github.com/$USER/$REPO/archive/refs/tags/$VERSION.tar.gz"
+TARBALL_URL="https://github.com/$GHUSER/$REPO/archive/refs/tags/$VERSION.tar.gz"
 i=0
 until curl -sfL "$TARBALL_URL" -o /tmp/msxiv-release.tgz 2>/dev/null; do
   i=$((i + 1))
@@ -92,7 +92,7 @@ echo "  sha256: $SHA"
 
 # --- 6. Update the template formula in this repo ------------------------------
 say "Updating msxiv.rb template ..."
-sed -i '' "s|https://github.com/$USER/$REPO/archive/refs/tags/.*\\.tar\\.gz|https://github.com/$USER/$REPO/archive/refs/tags/$VERSION.tar.gz|" msxiv.rb
+sed -i '' "s|https://github.com/$GHUSER/$REPO/archive/refs/tags/.*\\.tar\\.gz|https://github.com/$GHUSER/$REPO/archive/refs/tags/$VERSION.tar.gz|" msxiv.rb
 sed -i '' 's/sha256 ".*"  # .*$/sha256 "'"$SHA"'"/; s/sha256 "REPLACE_WITH_ACTUAL_SHA256"/sha256 "'"$SHA"'"/' msxiv.rb
 sed -i '' '/^  bottle do$/,/^  end$/d' msxiv.rb
 git add -A
@@ -100,24 +100,23 @@ git diff --cached --quiet || git commit -m "Update formula for $VERSION"
 git push origin main 2>/dev/null || git push origin main
 
 # --- 7. Tap repo ---------------------------------------------------------------
-say "Preparing tap $USER/$TAPREPO ..."
-if gh repo view "$USER/$TAPREPO" >/dev/null 2>&1; then
+say "Preparing tap $GHUSER/$TAPREPO ..."
+if gh repo view "$GHUSER/$TAPREPO" >/dev/null 2>&1; then
   echo "  tap repo already exists"
 else
-  gh repo create "$USER/$TAPREPO" --public --description "Homebrew tap for msxiv"
+  gh repo create "$GHUSER/$TAPREPO" --public --description "Homebrew tap for msxiv"
 fi
 TAPDIR="$(mktemp -d)/tap"
-git clone "https://github.com/$USER/$TAPREPO.git" "$TAPDIR"
+git clone "https://github.com/$GHUSER/$TAPREPO.git" "$TAPDIR"
 mkdir -p "$TAPDIR/Formula"
 cat > "$TAPDIR/Formula/msxiv.rb" <<EOF
 class Msxiv < Formula
   desc "Neo Simple X Image Viewer for macOS (Apple Silicon native)"
-  homepage "https://github.com/$USER/$REPO"
+  homepage "https://github.com/$GHUSER/$REPO"
   url "$TARBALL_URL"
   sha256 "$SHA"
   license "WTFPL"
 
-  depends_on xcode: ["14.0", :build]
   depends_on macos: :ventura
 
   def install
@@ -148,13 +147,13 @@ cd - >/dev/null
 # Homebrew only installs formulae that live in a tap, so tap first, then
 # install by tap name. (Uninstall first if a previous msxiv exists.)
 say "Testing tap install from source ..."
-brew tap "$USER/tap" 2>/dev/null || true
+brew tap "$GHUSER/tap" 2>/dev/null || true
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
-brew install --build-from-source "$USER/tap/msxiv"
+brew install --build-from-source "$GHUSER/tap/msxiv"
 "$(brew --prefix)/bin/msxiv" -h >/dev/null 2>&1 && echo "  smoke test OK"
-brew test "$USER/tap/msxiv" 2>/dev/null || brew test msxiv 2>/dev/null \
+brew test "$GHUSER/tap/msxiv" 2>/dev/null || brew test msxiv 2>/dev/null \
   || echo "  (brew test skipped)"
-brew audit --strict --new "$USER/tap/msxiv" 2>/dev/null \
+brew audit --strict --new "$GHUSER/tap/msxiv" 2>/dev/null \
   || echo "  warning: brew audit nits — review before announcing"
 brew uninstall msxiv
 
@@ -168,9 +167,9 @@ if [ -e "$BREWBIN" ] && [ ! -L "$BREWBIN" ]; then
   echo "  moved your manual install to $BREWBIN.pre-brew-backup"
 fi
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
-brew tap "$USER/tap" 2>/dev/null || true
+brew tap "$GHUSER/tap" 2>/dev/null || true
 brew install msxiv
 msxiv -h >/dev/null 2>&1 && echo "  msxiv installed and working"
 
-say "Done. Users install with: brew tap $USER/tap && brew install msxiv"
+say "Done. Users install with: brew tap $GHUSER/tap && brew install msxiv"
 say "Next release: ./publish.sh vX.Y.Z"
