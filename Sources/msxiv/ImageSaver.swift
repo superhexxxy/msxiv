@@ -19,11 +19,19 @@ struct ImageSaver {
         }
 
         let uti = (CGImageSourceGetType(src) as String?) ?? "public.png"
+
+        // Carry the original metadata (EXIF incl. DateTimeOriginal, GPS, ICC
+        // profile, color info) through the re-encode so rotation-save doesn't
+        // silently strip it. Orientation is baked into the pixels by the
+        // rotation below, so the stale orientation tag must be reset to .1.
+        var props: [CFString: Any] =
+            (CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]) ?? [:]
+        props[kCGImagePropertyOrientation] = 1
+        if uti == "public.jpeg" { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
+
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent(".msxiv-\(UUID().uuidString).tmp")
         guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, uti as CFString, 1, nil) else { return false }
-        var props: [CFString: Any] = [:]
-        if uti == "public.jpeg" { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
         CGImageDestinationAddImage(dest, img, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
             try? FileManager.default.removeItem(at: tmp)

@@ -8,7 +8,13 @@ class ThumbnailView: NSView {
     var padding: CGFloat = 8
     
     private var thumbnails: [Int: CGImage] = [:]
+    /// URL of the file each cached thumbnail belongs to. Index-keyed caches
+    /// go stale when files are deleted/shifted; keeping the URL alongside
+    /// lets `didDeleteFiles` remap entries instead of flushing everything,
+    /// and lets async completions verify their target cell is still valid.
+    private var thumbURLs: [Int: URL] = [:]
     private var pendingRequests: Set<Int> = []
+    private var pendingRequestURLs: [Int: URL] = [:]
     private var movingWindow = false
     var thumbInfoCache: [String: String] = [:] // Cache for thumb-info script output
     
@@ -172,25 +178,23 @@ class ThumbnailView: NSView {
         let file = files[index]
         if let cached = ThumbnailCache.shared.cachedThumbnail(for: file) {
             thumbnails[index] = cached
+            thumbURLs[index] = file
             pendingRequests.remove(index)
+            pendingRequestURLs.removeValue(forKey: index)
             needsDisplay = true
             return
         }
         ThumbnailCache.shared.generateAndCache(for: file, maxSize: thumbnailSize) { [weak self] img in
             guard let self = self else { return }
-            // File list may have shifted (delete) since the request was made.
-            guard index < self.files.count, self.files[index] == file else {
-                self.pendingRequests.remove(index)
-                return
-            }
-            self.thumbnails[index] = img
+            // The cell may have shifted (delete) since the request was made:
+            // resolve the URL's *current* index rather than trusting `index`.
             self.pendingRequests.remove(index)
+            self.pendingRequestURLs.removeValue(forKey: index)
+            guard let cur = self.files.firstIndex(of: file) else { return }
+            self.thumbnails[cur] = img
+            self.thumbURLs[cur] = file
             // Only invalidate the one cell that changed, not the whole grid.
-            if let idx = self.files.firstIndex(of: file), idx == index {
-                self.setNeedsDisplay(self.cellRect(for: index))
-            } else {
-                self.needsDisplay = true
-            }
+            self.setNeedsDisplay(self.cellRect(for: cur))
         }
     }
     
@@ -217,6 +221,7 @@ class ThumbnailView: NSView {
                 if i >= n { break }
                 if thumbnails[i] == nil && !pendingRequests.contains(i) {
                     pendingRequests.insert(i)
+                    pendingRequestURLs[i] = files[i]
                     requestThumbnail(index: i)
                 }
                 // Preload thumb-info
@@ -227,7 +232,12 @@ class ThumbnailView: NSView {
                         guard let self = self else { return }
                         self.pendingThumbInfo.remove(file.path)
                         self.thumbInfoCache[file.path] = output ?? file.lastPathComponent
-                        self.setNeedsDisplay(self.cellRect(for: i))
+                        // The list may have shifted since the request was
+                        // made: resolve the file's current index instead of
+                        // trusting the captured loop index `i`.
+                        if let cur = self.files.firstIndex(of: file) {
+                            self.setNeedsDisplay(self.cellRect(for: cur))
+                        }
                     }
                 }
             }
@@ -251,10 +261,34 @@ class ThumbnailView: NSView {
         setNeedsDisplay(cellRect(for: index))
     }
 
-    /// Indices shifted after a delete — drop index-keyed caches and reload.
+    /// Indices shifted after a delete — re-key index-based caches by URL so
+    /// thumbnails for files that merely moved index survive the deletion,
+    /// then reload. O(n) single pass with a path→newIndex map (no per-entry
+    /// linear `firstIndex` scans).
     func didDeleteFiles() {
-        thumbnails.removeAll()
-        pendingRequests.removeAll()
+        var newIndexByPath: [String: Int] = [:]
+        newIndexByPath.reserveCapacity(files.count)
+        for (i, f) in files.enumerated() { newIndexByPath[f.path] = i }
+
+        var newThumbs: [Int: CGImage] = [:]
+        var newThumbURLs: [Int: URL] = [:]
+        for (idx, img) in thumbnails {
+            guard idx < files.count, let url = thumbURLs[idx],
+                  let newIdx = newIndexByPath[url.path] else { continue }
+            newThumbs[newIdx] = img
+            newThumbURLs[newIdx] = url
+        }
+        var newPending: Set<Int> = []
+        var newPendingURLs: [Int: URL] = [:]
+        for (idx, url) in pendingRequestURLs {
+            guard let newIdx = newIndexByPath[url.path] else { continue }
+            newPending.insert(newIdx)
+            newPendingURLs[newIdx] = url
+        }
+        thumbnails = newThumbs
+        thumbURLs = newThumbURLs
+        pendingRequests = newPending
+        pendingRequestURLs = newPendingURLs
         pendingThumbInfo.removeAll()
         updateFrameHeight()
         preloadVisible()
@@ -288,11 +322,18 @@ class ThumbnailView: NSView {
             return
         }
         movingWindow = false
-        for i in 0..<files.count {
-            if cellRect(for: i).contains(point) {
-                selectAndScroll(to: i)
-                break
-            }
+        // O(1) hit-test: invert the grid layout instead of scanning every cell.
+        guard !files.isEmpty else { return }
+        let topY = frame.height - topPad
+        guard point.y <= topY else { return }
+        let row = Int(floor((topY - point.y) / cellSize))
+        let col = Int(floor((point.x - padding) / cellSize))
+        guard col >= 0, col < columns else { return }
+        let idx = row * columns + col
+        guard idx >= 0, idx < files.count else { return }
+        // Respect the inter-cell padding: only select inside the image rect.
+        if cellRect(for: idx).contains(point) {
+            selectAndScroll(to: idx)
         }
     }
 

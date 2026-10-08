@@ -1,17 +1,1 @@
-# Swift / SPM
-.build/
-*.o
-*.d
-
-# macOS
-.DS_Store
-*.dSYM/
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*~
-
-# Local test artifacts
-/tmp/
+(empty)

@@ -142,6 +142,20 @@ class AppWindow: NSWindow {
         var w = CGFloat(img.width)
         var h = CGFloat(img.height)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // Retina-aware: a 6000px photo must not request a 6000pt window —
+        // `shrink` would compute against the point-sized screen and the
+        // result gets clamped to full-screen anyway, jumping the user out
+        // of their layout. Cap by *pixel* capacity (points × backing scale).
+        let scale = backingScaleFactor > 0 ? backingScaleFactor : 2.0
+        if w > screen.width * scale || h > screen.height * scale {
+            let shrink = min(1, (screen.width * 0.8 * scale) / w,
+                             (screen.height * 0.8 * scale) / h)
+            w *= shrink
+            h *= shrink
+        }
+        // Convert back to points for the window frame.
+        w /= scale
+        h /= scale
         let shrink = min(1, (screen.width * 0.92) / w, (screen.height * 0.92) / h)
         w *= shrink
         h *= shrink
