@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" width="720" alt="msxiv logo">
+</p>
+
 # msxiv
 
 [![Swift](https://img.shields.io/badge/Swift-5.9+-FA7343?style=flat-square&logo=swift)](https://swift.org)

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="200" viewBox="0 0 720 200">
+  <!-- card -->
+  <rect width="720" height="200" rx="20" fill="#0a0a0f"/>
+
+  <!-- pixel corner accents -->
+  <rect x="14" y="14" width="8" height="8" fill="#ff6b9d"/>
+  <rect x="698" y="14" width="8" height="8" fill="#b388ff"/>
+  <rect x="14" y="178" width="8" height="8" fill="#7dd3fc"/>
+  <rect x="698" y="178" width="8" height="8" fill="#ff6b9d"/>
+
+  <!-- icon: pixel image frame with cat ears -->
+  <g>
+    <!-- left ear -->
+    <rect x="44" y="52" width="8" height="12" fill="#ff6b9d"/>
+    <rect x="52" y="44" width="8" height="20" fill="#ff6b9d"/>
+    <rect x="60" y="52" width="8" height="12" fill="#ff6b9d"/>
+    <rect x="52" y="52" width="8" height="8" fill="#b388ff"/>
+    <!-- right ear -->
+    <rect x="100" y="52" width="8" height="12" fill="#ff6b9d"/>
+    <rect x="108" y="44" width="8" height="20" fill="#ff6b9d"/>
+    <rect x="116" y="52" width="8" height="12" fill="#ff6b9d"/>
+    <rect x="108" y="52" width="8" height="8" fill="#b388ff"/>
+    <!-- frame -->
+    <rect x="28" y="64" width="112" height="88" fill="#ff6b9d"/>
+    <rect x="36" y="72" width="96" height="72" fill="#0a0a0f"/>
+    <!-- pixel sun -->
+    <rect x="104" y="84" width="12" height="12" fill="#f0f0f5"/>
+    <!-- pixel mountains -->
+    <rect x="88" y="132" width="36" height="12" fill="#7dd3fc"/>
+    <rect x="96" y="120" width="20" height="12" fill="#7dd3fc"/>
+    <rect x="44" y="128" width="48" height="16" fill="#b388ff"/>
+    <rect x="52" y="116" width="32" height="12" fill="#b388ff"/>
+    <rect x="60" y="104" width="16" height="12" fill="#b388ff"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="180" y="120" font-family="'JetBrains Mono','Courier New',monospace" font-size="68" font-weight="700"><tspan fill="#7a7a8a">&gt; </tspan><tspan fill="#f0f0f5">ms</tspan><tspan fill="#ff6b9d">xiv</tspan></text>
+  <!-- blinking cursor block -->
+  <rect x="478" y="72" width="10" height="50" fill="#ff6b9d"/>
+
+  <!-- tagline -->
+  <text x="182" y="158" font-family="'JetBrains Mono','Courier New',monospace" font-size="16" letter-spacing="2" fill="#7a7a8a">keyboard-driven image viewer for macOS</text>
+</svg>

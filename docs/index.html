@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>msxiv -- native macOS image viewer</title>
+    <meta name="description" content="A fast, keyboard-driven image viewer for macOS. Native Swift, zero dependencies.">
+    <link rel="icon" type="image/png" sizes="512x512" href="./avatar.png">
+    <link rel="apple-touch-icon" href="./avatar.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: #101018;
+            --fg: #e8e8f0;
+            --fg-dim: #7a7a8a;
+            --pink: #ff6b9d;
+            --purple: #b388ff;
+            --blue: #7dd3fc;
+            --white: #f0f0f5;
+            --border: #1c1c28;
+            --border-bright: #2a2a3a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        ::selection { background: var(--pink); color: var(--bg); }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg);
+            color: var(--fg);
+            line-height: 1.5;
+            font-size: 13px;
+            overflow-x: hidden;
+        }
+
+        /* Subtle scanlines */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        .container {
+            max-width: 820px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Pixel border utility */
+        .pixel-border {
+            border: 2px solid var(--border-bright);
+            position: relative;
+        }
+        .pixel-border::before {
+            content: '';
+            position: absolute;
+            top: -4px; left: -4px; right: -4px; bottom: -4px;
+            border: 1px solid var(--border);
+            pointer-events: none;
+        }
+
+        /* Nav */
+        nav {
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 0;
+            z-index: 100;
+        }
+
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 15px;
+            color: var(--pink);
+            letter-spacing: 0.05em;
+        }
+        .logo::before { content: '> '; color: var(--fg-dim); }
+
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--fg-dim);
+            text-decoration: none;
+            font-size: 12px;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover { color: var(--pink); }
+
+        /* Hero */
+        .hero {
+            padding: 60px 0 40px;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 700;
+            color: var(--white);
+            margin-bottom: 12px;
+        }
+        .hero h1 span { color: var(--pink); }
+
+        .hero .subtitle {
+            color: var(--fg-dim);
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+
+        .terminal-demo {
+            display: inline-block;
+            background: var(--bg-card);
+            border: 1px solid var(--border-bright);
+            padding: 14px 20px;
+            font-size: 13px;
+            text-align: left;
+        }
+
+        .terminal-line { display: block; margin: 4px 0; }
+        .prompt-char { color: var(--pink); }
+
+        .cursor {
+            display: inline-block;
+            width: 7px; height: 14px;
+            background: var(--pink);
+            animation: blink 1s step-end infinite;
+            vertical-align: middle;
+            margin-left: 3px;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 8px 18px;
+            font-size: 12px;
+            text-decoration: none;
+            font-family: 'JetBrains Mono', monospace;
+            transition: all 0.2s;
+            border: 1px solid var(--border-bright);
+        }
+
+        .btn-primary {
+            background: var(--pink);
+            color: var(--bg);
+            border-color: var(--pink);
+            font-weight: 600;
+        }
+        .btn-primary:hover { background: #ff85b1; }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--fg);
+        }
+        .btn-secondary:hover {
+            border-color: var(--purple);
+            color: var(--purple);
+        }
+
+        /* Sections */
+        section {
+            padding: 36px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        section h2 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-bottom: 16px;
+            font-weight: 500;
+            color: var(--purple);
+        }
+        section h2::before { content: '// '; color: var(--fg-dim); }
+
+        section p {
+            color: var(--fg-dim);
+            margin-bottom: 12px;
+            font-size: 13px;
+        }
+
+        section a {
+            color: var(--pink);
+            text-decoration: none;
+        }
+        section a:hover { text-decoration: underline; }
+
+        section h3 {
+            color: var(--white);
+            font-size: 13px;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        /* Features grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .feature {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 16px;
+            transition: border-color 0.2s;
+        }
+        .feature:hover { border-color: var(--border-bright); }
+
+        .feature-icon {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: var(--blue);
+        }
+        .feature:nth-child(2n) .feature-icon { color: var(--pink); }
+        .feature:nth-child(3n) .feature-icon { color: var(--purple); }
+
+        .feature h3 {
+            font-size: 13px;
+            font-weight: 500;
+            margin: 0 0 6px 0;
+            color: var(--white);
+        }
+
+        .feature p {
+            font-size: 12px;
+            color: var(--fg-dim);
+            margin: 0;
+            line-height: 1.5;
+        }
+
+        /* Code blocks */
+        .code-block {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 14px 16px;
+            margin: 12px 0;
+            font-size: 12px;
+            position: relative;
+        }
+
+        .code-line {
+            display: block;
+            margin: 3px 0;
+            padding: 3px 6px;
+            transition: background 0.15s;
+        }
+        .code-line:hover { background: rgba(255, 107, 157, 0.04); }
+
+        .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            background: var(--bg);
+            border: 1px solid var(--border-bright);
+            color: var(--fg-dim);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            transition: all 0.2s;
+            padding: 0;
+        }
+        .copy-btn:hover {
+            border-color: var(--pink);
+            color: var(--pink);
+        }
+        .copy-btn.copied {
+            border-color: var(--blue);
+            color: var(--blue);
+        }
+        .copy-btn svg {
+            width: 12px;
+            height: 12px;
+            fill: currentColor;
+        }
+
+        .comment { color: #4a4a5a; }
+        .cmd { color: var(--pink); }
+        .str { color: var(--purple); }
+        .flag { color: var(--blue); }
+
+        /* Keybindings */
+        .keybindings {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+            font-size: 12px;
+        }
+        .keybindings th {
+            text-align: left;
+            color: var(--fg-dim);
+            font-weight: 400;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border-bright);
+        }
+        .keybindings td {
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .keybindings td:first-child {
+            color: var(--pink);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .keybindings tr:hover { background: rgba(179, 136, 255, 0.03); }
+        .keybindings tr:last-child td { border-bottom: none; }
+
+        /* Pixel decorations */
+        .pixel-divider {
+            height: 4px;
+            background: repeating-linear-gradient(
+                90deg,
+                var(--pink) 0px, var(--pink) 4px,
+                transparent 4px, transparent 8px,
+                var(--purple) 8px, var(--purple) 12px,
+                transparent 12px, transparent 16px,
+                var(--blue) 16px, var(--blue) 20px,
+                transparent 20px, transparent 24px
+            );
+            margin: 24px 0;
+            opacity: 0.6;
+        }
+
+        .pixel-corner {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+        }
+        .pixel-corner.tl { top: -2px; left: -2px; background: var(--pink); }
+        .pixel-corner.tr { top: -2px; right: -2px; background: var(--purple); }
+        .pixel-corner.bl { bottom: -2px; left: -2px; background: var(--blue); }
+        .pixel-corner.br { bottom: -2px; right: -2px; background: var(--pink); }
+
+        /* Cat popup */
+        .cat-popup {
+            position: fixed;
+            background: var(--bg-card);
+            border: 2px solid var(--pink);
+            padding: 14px 16px;
+            z-index: 1000;
+            opacity: 0;
+            transform: scale(0.95);
+            transition: all 0.3s ease;
+            pointer-events: none;
+            max-width: 280px;
+            image-rendering: pixelated;
+        }
+
+        .cat-popup.show {
+            opacity: 1;
+            transform: scale(1);
+            pointer-events: all;
+        }
+
+        .cat-popup.top-left { top: 20px; left: 20px; }
+        .cat-popup.top-right { top: 20px; right: 20px; }
+        .cat-popup.bottom-left { bottom: 20px; left: 20px; }
+        .cat-popup.bottom-right { bottom: 20px; right: 20px; }
+        .cat-popup.center { top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95); }
+        .cat-popup.center.show { transform: translate(-50%, -50%) scale(1); }
+
+        .cat-ascii {
+            font-size: 11px;
+            line-height: 1.1;
+            margin-bottom: 8px;
+            color: var(--purple);
+            white-space: pre;
+            image-rendering: pixelated;
+        }
+
+        .cat-text {
+            color: var(--pink);
+            font-size: 12px;
+            font-weight: 500;
+            min-height: 16px;
+        }
+
+        .cat-text .typing-cursor {
+            display: inline-block;
+            width: 2px; height: 12px;
+            background: var(--pink);
+            animation: blink 0.7s step-end infinite;
+            vertical-align: middle;
+            margin-left: 2px;
+        }
+
+        .cat-close {
+            position: absolute;
+            top: 4px; right: 6px;
+            background: none;
+            border: none;
+            color: var(--fg-dim);
+            cursor: pointer;
+            font-size: 14px;
+            padding: 2px;
+            line-height: 1;
+        }
+        .cat-close:hover { color: var(--pink); }
+
+        .cat-paw {
+            position: fixed;
+            width: 12px;
+            height: 12px;
+            opacity: 0;
+            animation: pawFade 1.5s ease forwards;
+            pointer-events: none;
+            z-index: 999;
+            image-rendering: pixelated;
+        }
+
+        @keyframes pawFade {
+            0% { opacity: 0.7; }
+            100% { opacity: 0; }
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 24px 0;
+            text-align: center;
+        }
+        footer p {
+            color: var(--fg-dim);
+            font-size: 11px;
+        }
+        footer a { color: var(--pink); text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero { padding: 40px 0 30px; }
+            .hero h1 { font-size: 36px; }
+            .nav-links { gap: 14px; flex-wrap: wrap; justify-content: center; }
+            section { padding: 28px 0; }
+            .features { grid-template-columns: 1fr; }
+            .btn-group { flex-direction: column; }
+            .btn { width: 100%; text-align: center; }
+            .cat-popup { max-width: calc(100% - 32px); }
+        }
+
+        @media (max-width: 480px) {
+            .hero h1 { font-size: 28px; }
+            nav .container { justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <div class="logo">msxiv</div>
+            <ul class="nav-links">
+                <li><a href="#features">features</a></li>
+                <li><a href="#install">install</a></li>
+                <li><a href="#scripts">scripts</a></li>
+                <li><a href="#keys">keys</a></li>
+                <li><a href="https://github.com/superhexxxy/msxiv" target="_blank" rel="noopener">github</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="hero">
+            <h1>ms<span>xiv</span></h1>
+            <p class="subtitle">fast, keyboard-driven image viewer for macOS. native swift. zero deps.</p>
+            <div class="terminal-demo">
+                <span class="terminal-line"><span class="prompt-char">$</span> msxiv ~/Pictures</span>
+                <span class="terminal-line"><span class="prompt-char">$</span> msxiv -t ~/Wallpapers</span>
+                <span class="terminal-line"><span class="prompt-char">$</span> msxiv photo.jpg<span class="cursor"></span></span>
+            </div>
+            <div class="btn-group">
+                <a href="#install" class="btn btn-primary">install</a>
+                <a href="https://github.com/superhexxxy/msxiv" target="_blank" rel="noopener" class="btn btn-secondary">source</a>
+            </div>
+        </div>
+
+        <div class="pixel-divider"></div>
+
+        <section id="features">
+            <h2>features</h2>
+            <div class="features">
+                <div class="feature">
+                    <div class="feature-icon">[K]</div>
+                    <h3>keyboard-driven</h3>
+                    <p>navigate, zoom, rotate, manage. vim-style bindings throughout.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">[>]</div>
+                    <h3>native and fast</h3>
+                    <p>swift + appkit. no electron, no gtk, no qt. apple silicon optimized.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">[#]</div>
+                    <h3>thumbnail grid</h3>
+                    <p>toggle between image view and thumbnail grid. one keystroke.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">[&]</div>
+                    <h3>scriptable hooks</h3>
+                    <p>key handlers, window titles, image info via shell scripts.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">[*]</div>
+                    <h3>mark and select</h3>
+                    <p>mark files, copy paths, trash with confirm. batch workflows.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">[~]</div>
+                    <h3>minimal</h3>
+                    <p>does one thing well. no telemetry. no bloat. just an image viewer.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="install">
+            <h2>installation</h2>
+            <p>requires macOS 13+ and xcode command line tools.</p>
+
+            <h3>from source</h3>
+            <div class="code-block" data-copy-all="git clone https://github.com/superhexxxy/msxiv.git
+cd msxiv
+make
+sudo make install">
+                <div class="code-line"><span class="cmd">git clone</span> https://github.com/superhexxxy/msxiv.git</div>
+                <div class="code-line"><span class="cmd">cd</span> msxiv</div>
+                <div class="code-line"><span class="cmd">make</span></div>
+                <div class="code-line"><span class="cmd">sudo make</span> install</div>
+                <button class="copy-btn" title="copy all">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+
+            <h3>via homebrew</h3>
+            <div class="code-block" data-copy-all="brew install --build-from-source ./msxiv.rb">
+                <div class="code-line"><span class="cmd">brew install</span> <span class="flag">--build-from-source</span> ./msxiv.rb</div>
+                <button class="copy-btn" title="copy">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+
+            <h3>optional: config</h3>
+            <div class="code-block" data-copy-all="make install-config">
+                <div class="code-line"><span class="cmd">make</span> install-config</div>
+                <button class="copy-btn" title="copy">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+        </section>
+
+        <section id="scripts">
+            <h2>scripting</h2>
+            <p>msxiv works with shell scripts. here are some things you can do:</p>
+
+            <h3>open in preview with ; key</h3>
+            <p style="font-size:12px;">create <code style="color:var(--pink)">~/.config/msxiv/key-handler</code>:</p>
+            <div class="code-block" data-copy-all="#!/bin/sh
+while read file; do
+  open -a &quot;Preview&quot; &quot;$file&quot;
+done">
+                <div class="code-line"><span class="comment">#!/bin/sh</span></div>
+                <div class="code-line"><span class="cmd">while</span> read file; <span class="cmd">do</span></div>
+                <div class="code-line">&nbsp;&nbsp;<span class="cmd">open</span> <span class="flag">-a</span> <span class="str">"Preview"</span> <span class="str">"$file"</span></div>
+                <div class="code-line"><span class="cmd">done</span></div>
+                <button class="copy-btn" title="copy script">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+
+            <h3>copy marked files</h3>
+            <p style="font-size:12px;">press <code style="color:var(--pink)">x</code> to mark, then <code style="color:var(--pink)">;</code> to copy:</p>
+            <div class="code-block" data-copy-all="#!/bin/sh
+mkdir -p ~/Pictures/Selected
+while read file; do
+  cp &quot;$file&quot; ~/Pictures/Selected/
+done">
+                <div class="code-line"><span class="comment">#!/bin/sh</span></div>
+                <div class="code-line"><span class="cmd">mkdir</span> <span class="flag">-p</span> ~/Pictures/Selected</div>
+                <div class="code-line"><span class="cmd">while</span> read file; <span class="cmd">do</span></div>
+                <div class="code-line">&nbsp;&nbsp;<span class="cmd">cp</span> <span class="str">"$file"</span> ~/Pictures/Selected/</div>
+                <div class="code-line"><span class="cmd">done</span></div>
+                <button class="copy-btn" title="copy script">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+
+            <h3>show exif in status bar</h3>
+            <p style="font-size:12px;">create <code style="color:var(--pink)">~/.config/msxiv/image-info</code>:</p>
+            <div class="code-block" data-copy-all="#!/bin/sh
+file=&quot;$1&quot;
+exif=$(exiftool -Model -DateTimeOriginal &quot;$file&quot; 2>/dev/null)
+echo &quot;$exif&quot;">
+                <div class="code-line"><span class="comment">#!/bin/sh</span></div>
+                <div class="code-line">file=<span class="str">"$1"</span></div>
+                <div class="code-line">exif=<span class="cmd">$(</span>exiftool <span class="flag">-Model</span> <span class="flag">-DateTimeOriginal</span> <span class="str">"$file"</span> 2>/dev/null<span class="cmd">)</span></div>
+                <div class="code-line"><span class="cmd">echo</span> <span class="str">"$exif"</span></div>
+                <button class="copy-btn" title="copy script">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+
+            <h3>upload to cloud</h3>
+            <div class="code-block" data-copy-all="#!/bin/sh
+while read file; do
+  curl -F &quot;file=@$file&quot; https://0x0.st | pbcopy
+  osascript -e &quot;display notification \&quot;URL copied!\&quot; with title \&quot;msxiv\&quot;&quot;
+done">
+                <div class="code-line"><span class="comment">#!/bin/sh</span></div>
+                <div class="code-line"><span class="cmd">while</span> read file; <span class="cmd">do</span></div>
+                <div class="code-line">&nbsp;&nbsp;<span class="cmd">curl</span> <span class="flag">-F</span> <span class="str">"file=@$file"</span> https://0x0.st | <span class="cmd">pbcopy</span></div>
+                <div class="code-line">&nbsp;&nbsp;<span class="cmd">osascript</span> <span class="flag">-e</span> <span class="str">"display notification \"URL copied!\" with title \"msxiv\""</span></div>
+                <div class="code-line"><span class="cmd">done</span></div>
+                <button class="copy-btn" title="copy script">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+
+            <h3>set wallpaper</h3>
+            <div class="code-block" data-copy-all="#!/bin/sh
+while read file; do
+  osascript -e &quot;tell application \&quot;Finder\&quot; to set desktop picture to POSIX file \&quot;$file\&quot;&quot;
+done">
+                <div class="code-line"><span class="comment">#!/bin/sh</span></div>
+                <div class="code-line"><span class="cmd">while</span> read file; <span class="cmd">do</span></div>
+                <div class="code-line">&nbsp;&nbsp;<span class="cmd">osascript</span> <span class="flag">-e</span> <span class="str">"tell application \"Finder\" to set desktop picture to POSIX file \"$file\""</span></div>
+                <div class="code-line"><span class="cmd">done</span></div>
+                <button class="copy-btn" title="copy script">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+        </section>
+
+        <section id="keys">
+            <h2>keybindings</h2>
+            <table class="keybindings">
+                <thead><tr><th>key</th><th>action</th></tr></thead>
+                <tbody>
+                    <tr><td>h j k l</td><td>pan and navigate</td></tr>
+                    <tr><td>space / right</td><td>next image</td></tr>
+                    <tr><td>left</td><td>previous image</td></tr>
+                    <tr><td>g / G</td><td>first / last</td></tr>
+                    <tr><td>t</td><td>toggle thumbnails</td></tr>
+                    <tr><td>f</td><td>fullscreen</td></tr>
+                    <tr><td>w / W</td><td>fit image / fit window</td></tr>
+                    <tr><td>1</td><td>100% zoom</td></tr>
+                    <tr><td>+ / -</td><td>zoom in / out</td></tr>
+                    <tr><td>r / R</td><td>rotate (view / save)</td></tr>
+                    <tr><td>x</td><td>mark file</td></tr>
+                    <tr><td>c</td><td>copy path</td></tr>
+                    <tr><td>o</td><td>open in default app</td></tr>
+                    <tr><td>d</td><td>trash (confirm)</td></tr>
+                    <tr><td>s</td><td>toggle slideshow</td></tr>
+                    <tr><td>;</td><td>run key-handler</td></tr>
+                    <tr><td>q</td><td>quit</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="config">
+            <h2>configuration</h2>
+            <p>config at <code style="color:var(--pink)">~/.config/msxiv/config</code></p>
+            <div class="code-block" data-copy-all="thumbnail_size = 128
+zoom_increment = 1.25
+background_color = #282828
+status_bar = true
+sort_by = name
+recursive = false
+slideshow_delay = 3.0">
+                <div class="code-line">thumbnail_size = <span class="str">128</span></div>
+                <div class="code-line">zoom_increment = <span class="str">1.25</span></div>
+                <div class="code-line">background_color = <span class="str">#282828</span></div>
+                <div class="code-line">status_bar = <span class="str">true</span></div>
+                <div class="code-line">sort_by = <span class="str">name</span></div>
+                <div class="code-line">recursive = <span class="str">false</span></div>
+                <div class="code-line">slideshow_delay = <span class="str">3.0</span></div>
+                <button class="copy-btn" title="copy config">
+                    <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                </button>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>msxiv -- <a href="https://www.wtfpl.net/" target="_blank" rel="noopener">WTFPL</a> -- built with swift for macOS</p>
+        </div>
+    </footer>
+
+    <div class="cat-popup" id="catPopup">
+        <button class="cat-close" onclick="hideCat()">x</button>
+        <div class="cat-ascii" id="catAscii">  /\_/\  
+ ( o.o ) 
+  > ^ <</div>
+        <div class="cat-text" id="catText"><span class="typing-cursor"></span></div>
+    </div>
+
+    <script>
+        // Copy functionality
+        document.querySelectorAll('.copy-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var codeBlock = btn.parentElement;
+                var textToCopy = codeBlock.getAttribute('data-copy-all');
+                navigator.clipboard.writeText(textToCopy).then(function() {
+                    btn.classList.add('copied');
+                    btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+                    setTimeout(function() {
+                        btn.classList.remove('copied');
+                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
+                    }, 1500);
+                });
+            });
+        });
+
+        // Cat
+        var catMessages = [
+            "meoWOW!", "meow~", ":3", "purr~", "nya!", "miao!",
+            "meow meow!", "mrrow~", "prrrr", "nyaa~",
+            "pssst... you're doing great!", "this code is purrfect",
+            "i believe in you, human", "*headpats*", "meowdy partner!",
+            "you're pawsome at coding!", "did someone say fish?",
+            "i'm not sleeping, i'm compiling", "keyboard cat approves",
+            "this terminal is cozy", "mrow?", "sudo give me treats",
+            "meow.txt", "i am the cat daemon", "fork() meow",
+            "git commit -m 'meow'", "error 404: mouse not found",
+            "segmentation purr", "hackerman cat activated",
+            "rm -rf /stress", "chmod +x happiness",
+            "i cat even right meow", "you've got to be kitten me",
+            "i'm feline good about this code", "pawsitive vibes only",
+            "that's a purrty clean implementation",
+            "meow or never!", "fur real though, nice work",
+            "cat > /dev/null", "ps aux | grep meow",
+            "uptime: purring for 9 lives", "tail -f /var/log/meows",
+            "whoami? a cat. obviously.", "ls -la ~/treats/",
+            "systemctl start purring.service", "ssh cat@localhost",
+            "npm install --save meow", "pip install catnip",
+            "brew install whiskers", "ctrl+z the existential dread",
+            "have you tried turning it off and on again?",
+            "hiss at bad code", "*stretches claws*",
+            "cat /proc/self/status: naps=9001",
+            "mount /dev/naps /mnt/comfort",
+            "curl -X POST https://treats.cat/me"
+        ];
+
+        var catAsciiVariants = [
+            "  /\\_/\\  \n ( o.o ) \n  > ^ < ",
+            "  /\\_/\\  \n ( ^.^ ) \n  >   < ",
+            "  /\\_/\\  \n ( >.< ) \n  >   < ",
+            "  /\\_/\\  \n ( owo ) \n  >   < ",
+            "  /\\_/\\  \n ( -.- ) \n  > z < "
+        ];
+
+        var positions = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'];
+        var catPopup = document.getElementById('catPopup');
+        var catText = document.getElementById('catText');
+        var catAscii = document.getElementById('catAscii');
+        var catTimeout, typingTimeout;
+
+        function createPawPrint(x, y) {
+            var paw = document.createElement('div');
+            paw.className = 'cat-paw';
+            paw.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="1" width="2" height="2" fill="#ff6b9d"/><rect x="8" y="1" width="2" height="2" fill="#ff6b9d"/><rect x="1" y="5" width="2" height="2" fill="#ff6b9d"/><rect x="9" y="5" width="2" height="2" fill="#ff6b9d"/><rect x="4" y="7" width="4" height="4" fill="#ff6b9d"/></svg>';
+            paw.style.left = x + 'px';
+            paw.style.top = y + 'px';
+            document.body.appendChild(paw);
+            setTimeout(function() { paw.remove(); }, 1500);
+        }
+
+        function typeText(text, element, callback) {
+            var i = 0;
+            element.innerHTML = '<span class="typing-cursor"></span>';
+            function type() {
+                if (i < text.length) {
+                    element.innerHTML = text.substring(0, i + 1) + '<span class="typing-cursor"></span>';
+                    i++;
+                    typingTimeout = setTimeout(type, 40);
+                } else { if (callback) callback(); }
+            }
+            type();
+        }
+
+        function showCat() {
+            var msg = catMessages[Math.floor(Math.random() * catMessages.length)];
+            var ascii = catAsciiVariants[Math.floor(Math.random() * catAsciiVariants.length)];
+            var pos = positions[Math.floor(Math.random() * positions.length)];
+            positions.forEach(function(p) { catPopup.classList.remove(p); });
+            catPopup.classList.add(pos);
+            catAscii.textContent = ascii;
+            catPopup.classList.add('show');
+            typeText(msg, catText);
+            setTimeout(function() {
+                for (var i = 0; i < 3; i++) {
+                    (function(idx) {
+                        setTimeout(function() {
+                            createPawPrint(Math.random() * window.innerWidth, Math.random() * window.innerHeight);
+                        }, idx * 150);
+                    })(i);
+                }
+            }, 400);
+            catTimeout = setTimeout(hideCat, 5000);
+        }
+
+        function hideCat() {
+            catPopup.classList.remove('show');
+            clearTimeout(catTimeout);
+            clearTimeout(typingTimeout);
+            catText.innerHTML = '<span class="typing-cursor"></span>';
+            setTimeout(showCat, Math.random() * 30000 + 20000);
+        }
+
+        catPopup.addEventListener('click', function(e) {
+            if (!e.target.classList.contains('cat-close') && !e.target.closest('.cat-close')) {
+                var msg = catMessages[Math.floor(Math.random() * catMessages.length)];
+                var ascii = catAsciiVariants[Math.floor(Math.random() * catAsciiVariants.length)];
+                catAscii.textContent = ascii;
+                clearTimeout(catTimeout);
+                typeText(msg, catText, function() {
+                    catTimeout = setTimeout(hideCat, 5000);
+                });
+            }
+        });
+
+        setTimeout(showCat, Math.random() * 6000 + 8000);
+
+        // Smooth scroll
+        document.querySelectorAll('a[href^="#"]').forEach(function(a) {
+            a.addEventListener('click', function(e) {
+                e.preventDefault();
+                var t = document.querySelector(this.getAttribute('href'));
+                if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+        });
+    </script>
+</body>
+</html>
