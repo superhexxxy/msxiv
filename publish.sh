@@ -26,12 +26,13 @@ gh auth status >/dev/null 2>&1 || { echo "error: gh not authenticated — run: g
 command -v brew >/dev/null 2>&1 || { echo "error: brew not found" >&2; exit 1; }
 
 # --- 1. Brand files with real username ---------------------------------------
+# NOTE: never touch .git internals or this script's own branding logic.
 say "Branding files as $USER ..."
-grep -rl "yourusername" -- . 2>/dev/null | while IFS= read -r f; do
+grep -rl "yourusername" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null | while IFS= read -r f; do
   sed -i '' "s/yourusername/$USER/g" "$f"
   echo "  updated $f"
 done || true
-if grep -rq "yourusername" -- . 2>/dev/null; then
+if grep -rq "yourusername" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null; then
   echo "error: 'yourusername' placeholders remain" >&2; exit 1
 fi
 
