@@ -149,6 +149,9 @@ cd - >/dev/null
 # would block `brew link`, so back it up out of the way first.
 say "Testing tap install from source ..."
 brew tap "$GHUSER/tap" 2>/dev/null || true
+# Trust lapses between runs (uninstalls revoke it) — re-grant or step 9 refuses to load.
+brew trust "$GHUSER/tap" 2>/dev/null \
+  || brew trust --formula "$GHUSER/tap/msxiv" 2>/dev/null || true
 # An already-tapped checkout goes stale — pull it, or this installs yesterday's formula.
 git -C "$(brew --repository)/Library/Taps/$GHUSER/homebrew-tap" pull --ff-only >/dev/null 2>&1 \
   || brew update >/dev/null 2>&1 || true
@@ -160,8 +163,9 @@ fi
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
 brew install --build-from-source "$GHUSER/tap/msxiv"
 "$(brew --prefix)/bin/msxiv" -h >/dev/null 2>&1 && echo "  smoke test OK"
-brew test "$GHUSER/tap/msxiv" 2>/dev/null || brew test msxiv 2>/dev/null \
-  || echo "  (brew test skipped)"
+# NOTE: no `brew test` here on purpose. It sandboxes the test block, and a GUI
+# AppKit app can't even reach main() without WindowServer access, so `--help`
+# hangs forever under it. The direct smoke test above is our test.
 brew audit --strict --new "$GHUSER/tap/msxiv" 2>/dev/null \
   || echo "  warning: brew audit nits — review before announcing"
 brew uninstall msxiv
@@ -177,6 +181,8 @@ if [ -e "$BREWBIN" ] && [ ! -L "$BREWBIN" ]; then
 fi
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
 brew tap "$GHUSER/tap" 2>/dev/null || true
+brew trust "$GHUSER/tap" 2>/dev/null \
+  || brew trust --formula "$GHUSER/tap/msxiv" 2>/dev/null || true
 brew install msxiv
 msxiv -h >/dev/null 2>&1 && echo "  msxiv installed and working"
 
