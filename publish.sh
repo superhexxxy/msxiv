@@ -26,14 +26,17 @@ gh auth status >/dev/null 2>&1 || { echo "error: gh not authenticated — run: g
 command -v brew >/dev/null 2>&1 || { echo "error: brew not found" >&2; exit 1; }
 
 # --- 1. Brand files with real username ---------------------------------------
-# NOTE: never touch .git internals or this script's own branding logic.
+# Explicit file list only: never recursive (would touch .git) and never this
+# script itself (would rewrite its own branding logic on macOS/BSD grep).
 say "Branding files as $USER ..."
-grep -rl "superhexxxy" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null | while IFS= read -r f; do
-  sed -i '' "s/superhexxxy/$USER/g" "$f"
-  echo "  updated $f"
-done || true
-if grep -rq "superhexxxy" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null; then
-  echo "error: 'superhexxxy' placeholders remain" >&2; exit 1
+for f in msxiv.rb README.md; do
+  if [ -f "$f" ] && grep -q "yourusername" "$f" 2>/dev/null; then
+    sed -i '' "s/yourusername/$USER/g" "$f"
+    echo "  updated ./$f"
+  fi
+done
+if grep -rq "yourusername" -- msxiv.rb README.md Makefile config.example install.sh update.sh Sources 2>/dev/null; then
+  echo "error: 'yourusername' placeholders remain" >&2; exit 1
 fi
 
 # --- 2. LICENSE (WTFPL — already in repo; fetch only if missing) --------------
@@ -142,13 +145,17 @@ git push -u origin main 2>/dev/null || git push origin main
 cd - >/dev/null
 
 # --- 8. Test install exactly as users get it -----------------------------------
-# (Uninstall first if a previous msxiv exists — brew refuses to install over one.)
-say "Testing bottled-from-source install ..."
+# Homebrew only installs formulae that live in a tap, so tap first, then
+# install by tap name. (Uninstall first if a previous msxiv exists.)
+say "Testing tap install from source ..."
+brew tap "$USER/tap" 2>/dev/null || true
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
-brew install --build-from-source "$TAPDIR/Formula/msxiv.rb"
+brew install --build-from-source "$USER/tap/msxiv"
 "$(brew --prefix)/bin/msxiv" -h >/dev/null 2>&1 && echo "  smoke test OK"
-brew test msxiv 2>/dev/null || echo "  (brew test skipped — formula not from tap yet)"
-brew audit --strict --new msxiv 2>/dev/null || echo "  warning: brew audit nits — review before announcing"
+brew test "$USER/tap/msxiv" 2>/dev/null || brew test msxiv 2>/dev/null \
+  || echo "  (brew test skipped)"
+brew audit --strict --new "$USER/tap/msxiv" 2>/dev/null \
+  || echo "  warning: brew audit nits — review before announcing"
 brew uninstall msxiv
 
 # --- 9. Final install from the tap ----------------------------------------------
