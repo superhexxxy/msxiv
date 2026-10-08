@@ -15,16 +15,41 @@ enum AppAction {
 class ImageView: NSView {
     static let statusBarHeight: CGFloat = 22
 
-    var image: CGImage? { didSet { needsDisplay = true } }
-    var zoom: CGFloat = 1.0 { didSet { needsDisplay = true; onZoomChanged?() } }
-    var offset: CGPoint = .zero { didSet { needsDisplay = true } }
-    var rotation: CGFloat = 0.0 { didSet { needsDisplay = true } }
+    // Redraws are coalesced via setNeedsDisplay(): a change that lands while
+    // the view is already dirty skips redundant display-cycle scheduling.
+    var image: CGImage? { didSet { setNeedsDisplay() } }
+    var zoom: CGFloat = 1.0 { didSet { setNeedsDisplay(); onZoomChanged?() } }
+    var offset: CGPoint = .zero { didSet { setNeedsDisplay() } }
+    var rotation: CGFloat = 0.0 { didSet { setNeedsDisplay() } }
     var backgroundColor: NSColor = NSColor(calibratedRed: 0.15, green: 0.15, blue: 0.15, alpha: 1.0)
-    var isMarked: Bool = false { didSet { needsDisplay = true } }
+    var isMarked: Bool = false { didSet { setNeedsDisplay() } }
     
-    var statusInfo: String? // Output from image-info script
-    var defaultInfo: String = "" // Fallback info string
-    var confirmPrompt: String? // When set: red Y/N bar replaces the status bar
+    var statusInfo: String? { didSet { setNeedsDisplay() } } // Output from image-info script
+    var defaultInfo: String = "" { didSet { setNeedsDisplay() } } // Fallback info string
+    var confirmPrompt: String? { didSet { setNeedsDisplay() } } // When set: red Y/N bar replaces the status bar
+
+    /// Cached NSString + attributes for the status bar text. The draw path
+    /// used to re-bridge and rebuild these every frame.
+    private var cachedStatusText: NSString?
+    private var cachedStatusAttrs: [NSAttributedString.Key: Any]?
+    private var cachedStatusLineHeight: CGFloat?
+
+    private func statusAttrs() -> [NSAttributedString.Key: Any] {
+        if let attrs = cachedStatusAttrs { return attrs }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.white
+        ]
+        cachedStatusAttrs = attrs
+        return attrs
+    }
+
+    private func statusString(_ text: String) -> NSString {
+        if let cached = cachedStatusText, cached as String == text { return cached }
+        let ns = text as NSString
+        cachedStatusText = ns
+        return ns
+    }
     
     var onAction: ((AppAction) -> Void)?
     var onZoomChanged: (() -> Void)?
@@ -70,13 +95,14 @@ class ImageView: NSView {
             ctx.fill(barRect)
             infoText = statusInfo ?? defaultInfo
         }
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-            .foregroundColor: NSColor.white
-        ]
-        let textSize = (infoText as NSString).size(withAttributes: attrs)
-        let textRect = NSRect(x: 8, y: (barHeight - textSize.height) / 2, width: bounds.width - 16, height: textSize.height)
-        (infoText as NSString).draw(in: textRect, withAttributes: attrs)
+        let ns = statusString(infoText)
+        let attrs = statusAttrs()
+        // Monospaced 11pt: uniform line height -> measure once, reuse.
+        if cachedStatusLineHeight == nil {
+            cachedStatusLineHeight = ("X" as NSString).size(withAttributes: attrs).height
+        }
+        let textRect = NSRect(x: 8, y: (barHeight - cachedStatusLineHeight!) / 2, width: bounds.width - 16, height: cachedStatusLineHeight!)
+        ns.draw(in: textRect, withAttributes: attrs)
     }
     
     // MARK: - Mouse Events
@@ -107,7 +133,7 @@ class ImageView: NSView {
         offset.x += (current.x - last.x) / zoom
         offset.y += (current.y - last.y) / zoom
         lastMouseLocation = current
-        needsDisplay = true
+        // offset.didSet already marked the view dirty — no extra needsDisplay.
     }
     
     override func mouseUp(with event: NSEvent) {

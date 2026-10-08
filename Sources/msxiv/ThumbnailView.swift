@@ -1,8 +1,8 @@
 import AppKit
 
 class ThumbnailView: NSView {
-    var files: [URL] = []
-    var markedFiles: Set<URL> = []
+    var files: [URL] = [] { didSet { labelStrings.removeAll() } }
+    var markedFiles: Set<URL> = [] { didSet { setNeedsDisplay() } }
     var selectedIndex: Int = 0
     var thumbnailSize: Int = 128
     var padding: CGFloat = 8
@@ -12,9 +12,26 @@ class ThumbnailView: NSView {
     private var movingWindow = false
     var thumbInfoCache: [String: String] = [:] // Cache for thumb-info script output
     
-    var statusInfo: String?
-    var defaultInfo: String = ""
-    var confirmPrompt: String? // When set: red Y/N bar replaces the status bar
+    // Redraws are coalesced via setNeedsDisplay(): changes that land while
+    // the view is already dirty skip redundant display-cycle scheduling.
+    var statusInfo: String? { didSet { setNeedsDisplay() } }
+    var defaultInfo: String = "" { didSet { setNeedsDisplay() } }
+    var confirmPrompt: String? { didSet { setNeedsDisplay() } } // When set: red Y/N bar replaces the status bar
+
+    /// Cached attribute dicts: these were rebuilt per cell on every frame.
+    private lazy var labelAttrs: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 9),
+        .foregroundColor: NSColor.lightGray
+    ]
+    private lazy var labelAttrsSelected: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 9),
+        .foregroundColor: NSColor.white
+    ]
+    private lazy var statusAttrs: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+        .foregroundColor: NSColor.white
+    ]
+    private var cachedStatusLineHeight: CGFloat?
     
     var onSelect: ((Int) -> Void)?
     var onToggleMode: (() -> Void)?
@@ -41,10 +58,16 @@ class ThumbnailView: NSView {
     }
     
     func cellRect(for index: Int) -> NSRect {
-        let col = index % columns
-        let row = index / columns
-        let x = padding + CGFloat(col) * cellSize
-        let y = frame.height - topPad - CGFloat(row + 1) * cellSize
+        cellRect(for: index, columns: columns, cellSize: cellSize)
+    }
+
+    /// Fast path for the draw/preload loops: layout constants computed once
+    /// per frame and passed in instead of recomputed per cell.
+    private func cellRect(for index: Int, columns cols: Int, cellSize cSize: CGFloat) -> NSRect {
+        let col = index % cols
+        let row = index / cols
+        let x = padding + CGFloat(col) * cSize
+        let y = frame.height - topPad - CGFloat(row + 1) * cSize
         return NSRect(x: x, y: y, width: CGFloat(thumbnailSize), height: CGFloat(thumbnailSize))
     }
 
@@ -61,9 +84,16 @@ class ThumbnailView: NSView {
         ctx.fill(bounds)
         
         let visibleRect = self.visibleRect
-        
-        for i in 0..<files.count {
-            let rect = cellRect(for: i)
+        // Snapshot layout values once per frame instead of recomputing the
+        // same property-chain math for every cell.
+        let nCells = files.count
+        let cols = columns
+        let cSize = cellSize
+        let halfPad = padding / 2
+        let tMax = CGFloat(thumbnailSize)
+
+        for i in 0..<nCells {
+            let rect = cellRect(for: i, columns: cols, cellSize: cSize)
             guard rect.intersects(visibleRect) else { continue }
             
             let file = files[i]
@@ -72,7 +102,7 @@ class ThumbnailView: NSView {
             
             let cellBg = isSelected ? NSColor.systemBlue.withAlphaComponent(0.3) : NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1.0)
             cellBg.setFill()
-            ctx.fill(rect.insetBy(dx: -padding/2, dy: -padding/2))
+            ctx.fill(rect.insetBy(dx: -halfPad, dy: -halfPad))
             
             if isSelected {
                 NSColor.systemBlue.setStroke()
@@ -87,7 +117,7 @@ class ThumbnailView: NSView {
             
             if let thumb = thumbnails[i] {
                 let thumbSize = CGSize(width: thumb.width, height: thumb.height)
-                let scale = min(CGFloat(thumbnailSize) / thumbSize.width, CGFloat(thumbnailSize) / thumbSize.height)
+                let scale = min(tMax / thumbSize.width, tMax / thumbSize.height)
                 let drawSize = CGSize(width: thumbSize.width * scale, height: thumbSize.height * scale)
                 let drawRect = NSRect(x: rect.midX - drawSize.width / 2, y: rect.midY - drawSize.height / 2, width: drawSize.width, height: drawSize.height)
                 ctx.draw(thumb, in: drawRect)
@@ -100,14 +130,12 @@ class ThumbnailView: NSView {
                 }
             }
             
-            // Draw filename or thumb-info (sits above the status bar)
-            let nameText = thumbInfoCache[file.path] ?? file.lastPathComponent
+            // Draw filename or thumb-info (sits above the status bar).
+            // The NSString bridge is memoized; `as NSString` allocates a
+            // wrapper on every call otherwise.
+            let nameText = labelString(for: file)
             let nameRect = labelRect(forCell: rect)
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 9),
-                .foregroundColor: isSelected ? NSColor.white : NSColor.lightGray
-            ]
-            (nameText as NSString).draw(in: nameRect, withAttributes: attrs)
+            nameText.draw(in: nameRect, withAttributes: isSelected ? labelAttrsSelected : labelAttrs)
         }
         
         // --- Draw Status Bar (or red confirm bar) ---
@@ -122,13 +150,22 @@ class ThumbnailView: NSView {
             ctx.fill(barRect)
             infoText = statusInfo ?? defaultInfo
         }
-        let textAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-            .foregroundColor: NSColor.white
-        ]
-        let textSize = (infoText as NSString).size(withAttributes: textAttrs)
-        let textRect = NSRect(x: 8, y: (barHeight - textSize.height) / 2, width: bounds.width - 16, height: textSize.height)
-        (infoText as NSString).draw(in: textRect, withAttributes: textAttrs)
+        if cachedStatusLineHeight == nil {
+            cachedStatusLineHeight = ("X" as NSString).size(withAttributes: statusAttrs).height
+        }
+        let lh = cachedStatusLineHeight!
+        let textRect = NSRect(x: 8, y: (barHeight - lh) / 2, width: bounds.width - 16, height: lh)
+        (infoText as NSString).draw(in: textRect, withAttributes: statusAttrs)
+    }
+
+    /// Memoized NSString per file path so each redraw does not re-bridge.
+    private var labelStrings: [String: NSString] = [:]
+    private func labelString(for file: URL) -> NSString {
+        let text = thumbInfoCache[file.path] ?? file.lastPathComponent
+        if let cached = labelStrings[file.path], cached as String == text { return cached }
+        let ns = text as NSString
+        labelStrings[file.path] = ns
+        return ns
     }
     
     private func requestThumbnail(index: Int) {
@@ -141,46 +178,84 @@ class ThumbnailView: NSView {
         }
         ThumbnailCache.shared.generateAndCache(for: file, maxSize: thumbnailSize) { [weak self] img in
             guard let self = self else { return }
+            // File list may have shifted (delete) since the request was made.
+            guard index < self.files.count, self.files[index] == file else {
+                self.pendingRequests.remove(index)
+                return
+            }
             self.thumbnails[index] = img
             self.pendingRequests.remove(index)
-            self.needsDisplay = true
+            // Only invalidate the one cell that changed, not the whole grid.
+            if let idx = self.files.firstIndex(of: file), idx == index {
+                self.setNeedsDisplay(self.cellRect(for: index))
+            } else {
+                self.needsDisplay = true
+            }
         }
     }
     
     func preloadVisible() {
         let visibleRect = self.visibleRect
-        let expanded = visibleRect.insetBy(dx: -cellSize * 2, dy: -cellSize * 2)
-        for i in 0..<files.count {
-            let rect = cellRect(for: i)
-            if rect.intersects(expanded) {
+        let cSize = cellSize
+        let cols = columns
+        let expanded = visibleRect.insetBy(dx: -cSize * 2, dy: -cSize * 2)
+        let n = files.count
+        guard n > 0 else { return }
+
+        // Grid layout is deterministic: compute the first/last row that
+        // intersects the expanded rect instead of testing every file. The
+        // horizontal span always covers all columns (the expanded rect
+        // reaches past both view edges), so no column clipping is needed.
+        let topY = frame.height - topPad
+        let lastRow = (n - 1) / cols
+        let r0 = max(0, min(Int((topY - expanded.maxY) / cSize), lastRow))
+        let r1 = max(0, min(Int((topY - expanded.minY) / cSize), lastRow))
+
+        for row in r0...r1 {
+            for col in 0..<cols {
+                let i = row * cols + col
+                if i >= n { break }
                 if thumbnails[i] == nil && !pendingRequests.contains(i) {
                     pendingRequests.insert(i)
                     requestThumbnail(index: i)
                 }
                 // Preload thumb-info
                 let file = files[i]
-                if thumbInfoCache[file.path] == nil {
+                if thumbInfoCache[file.path] == nil && !pendingThumbInfo.contains(file.path) {
+                    pendingThumbInfo.insert(file.path)
                     ScriptRunner.runScript(name: "thumb-info", arguments: [file.path]) { [weak self] output in
                         guard let self = self else { return }
+                        self.pendingThumbInfo.remove(file.path)
                         self.thumbInfoCache[file.path] = output ?? file.lastPathComponent
-                        self.needsDisplay = true
+                        self.setNeedsDisplay(self.cellRect(for: i))
                     }
                 }
             }
         }
     }
+
+    /// Paths with an in-flight thumb-info script; prevents re-spawning the
+    /// same subprocess on every scroll/redraw while a result is pending.
+    private var pendingThumbInfo: Set<String> = []
     
     func selectAndScroll(to index: Int) {
         guard index >= 0, index < files.count else { return }
+        let oldIndex = selectedIndex
         selectedIndex = index
         scrollToSelected()
-        needsDisplay = true
+        // Only the two changed cells need repainting (scroll may already
+        // have queued a redraw of newly exposed areas).
+        if oldIndex != index {
+            setNeedsDisplay(cellRect(for: oldIndex))
+        }
+        setNeedsDisplay(cellRect(for: index))
     }
 
     /// Indices shifted after a delete — drop index-keyed caches and reload.
     func didDeleteFiles() {
         thumbnails.removeAll()
         pendingRequests.removeAll()
+        pendingThumbInfo.removeAll()
         updateFrameHeight()
         preloadVisible()
         needsDisplay = true
