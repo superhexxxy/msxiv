@@ -73,6 +73,15 @@ class AppWindow: NSWindow {
     var isFullscreenLike: Bool {
         styleMask.contains(.fullScreen) || fullscreenBusy
     }
+
+    /// Focus the active mode's view. Logs on failure so a lost responder
+    /// chain is diagnosable instead of silently swallowing all keys.
+    func focusCurrentView() {
+        let v: NSView = currentMode == .thumbnail ? thumbnailView : imageView
+        if !makeFirstResponder(v) {
+            NSLog("msxiv: makeFirstResponder failed for %@ (mode %@)", "\(type(of: v))", "\(currentMode)")
+        }
+    }
     
     func switchToImageMode() {
         currentMode = .image
@@ -85,7 +94,7 @@ class AppWindow: NSWindow {
         if imageView.superview == nil {
             contentView?.addSubview(imageView)
         }
-        makeFirstResponder(imageView)
+        focusCurrentView()
     }
     
     func switchToThumbnailMode() {
@@ -102,7 +111,7 @@ class AppWindow: NSWindow {
         }
         thumbnailView.updateFrameHeight()
         thumbnailView.preloadVisible()
-        makeFirstResponder(thumbnailView)
+        focusCurrentView()
     }
 
     // MARK: - Status-bar window dragging (no titlebar to grab)

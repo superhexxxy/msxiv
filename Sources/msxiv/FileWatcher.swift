@@ -6,6 +6,19 @@ class FileWatcher {
     private var currentPath: String?
     private var onModify: (() -> Void)?
 
+    /// Pure decision function (unit-tested): reload ONLY when the watched file
+    /// itself changed. Never on sibling/directory noise (.DS_Store etc.).
+    static func shouldReload(eventPath: String, flags: FSEventStreamEventFlags, watchedPath: String) -> Bool {
+        let a = URL(fileURLWithPath: eventPath).standardized.resolvingSymlinksInPath().path
+        let b = URL(fileURLWithPath: watchedPath).standardized.resolvingSymlinksInPath().path
+        guard a == b else { return false }
+        return (flags & UInt32(kFSEventStreamEventFlagItemModified)) != 0
+            || (flags & UInt32(kFSEventStreamEventFlagItemRenamed)) != 0
+            || (flags & UInt32(kFSEventStreamEventFlagItemCreated)) != 0
+            || (flags & UInt32(kFSEventStreamEventFlagItemRemoved)) != 0
+            || (flags & UInt32(kFSEventStreamEventFlagItemInodeMetaMod)) != 0
+    }
+
     /// Start watching a file for modifications. Calls `onModify` when the file changes.
     func watch(file url: URL, onModify: @escaping () -> Void) {
         stop()
@@ -33,17 +46,7 @@ class FileWatcher {
 
             for i in 0..<numEvents {
                 guard i < paths.count else { continue }
-                let path = paths[i]
-                let flags = eventFlags[i]
-
-                let modified = (flags & UInt32(kFSEventStreamEventFlagItemModified)) != 0
-                let renamed = (flags & UInt32(kFSEventStreamEventFlagItemRenamed)) != 0
-                let created = (flags & UInt32(kFSEventStreamEventFlagItemCreated)) != 0
-                let removed = (flags & UInt32(kFSEventStreamEventFlagItemRemoved)) != 0
-                let inodeMeta = (flags & UInt32(kFSEventStreamEventFlagItemInodeMetaMod)) != 0
-
-                if (modified || renamed || created || removed || inodeMeta) &&
-                    (path == watched || FileManager.default.fileExists(atPath: watched)) {
+                if FileWatcher.shouldReload(eventPath: paths[i], flags: eventFlags[i], watchedPath: watched) {
                     DispatchQueue.main.async {
                         watcher.onModify?()
                     }

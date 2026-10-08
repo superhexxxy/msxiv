@@ -10,6 +10,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var pendingDeleteIndex: Int?
     var slideshowTimer: Timer?
     var slideshowDelay: Double = 3.0
+    var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         config = AppConfig()
@@ -43,9 +44,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         window = AppWindow(config: config)
         setupCallbacks()
+        installQuitGuard()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        window.makeFirstResponder(window.imageView)
+        window.focusCurrentView()
         
         if startInThumbnailMode {
             enterThumbnailMode()
@@ -58,10 +60,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Re-assert first responder when returning via Cmd-Tab / click,
         // otherwise keys fall through to the window and beep.
         if window == nil { return }
-        if window.currentMode == .thumbnail {
-            window.makeFirstResponder(window.thumbnailView)
-        } else {
-            window.makeFirstResponder(window.imageView)
+        window.focusCurrentView()
+    }
+
+    /// App-level safety net: q and Escape work even if the responder chain
+    /// ever breaks (a stuck quit is unacceptable). No text fields exist, so
+    /// there is nothing to steal typing from. Command-modified keys are left
+    /// alone, and an active delete prompt keeps y/n/Esc semantics in the views.
+    func installQuitGuard() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+                let promptUp = self.window.imageView.confirmPrompt != nil
+                    || self.window.thumbnailView.confirmPrompt != nil
+                let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+                if chars == "q" && !promptUp {
+                    NSApp.terminate(nil)
+                    return nil
+                }
+                if event.keyCode == 53 && promptUp {
+                    self.clearDeletePrompt()
+                    return nil
+                }
+            }
+            return event
         }
     }
 
