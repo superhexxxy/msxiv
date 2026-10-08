@@ -23,6 +23,11 @@ msxiv provides:
 - configurable script hooks
 - file marking and selection workflows
 - automatic reload of modified images
+- slideshow mode with adjustable delay
+- safe delete to Trash with confirmation
+- EXIF auto-orientation for phone and camera photos
+- disk-cached thumbnails for instant reopening
+- a borderless window that sizes itself to each image
 - minimal dependencies and no heavy runtime
 
 This project follows the same philosophy as classic Unix tools: small, fast, configurable, and focused on the task at hand.
@@ -111,6 +116,21 @@ msxiv -t ~/Pictures
 
 msxiv opens in image mode by default. Use the keyboard to navigate, zoom, and manipulate images.
 
+The window has no title bar. It resizes itself to fit each image, and
+`t` switches to a larger thumbnail grid. Drag the bottom status bar to move
+the window, or press `f` for fullscreen.
+
+### Status bar
+
+Every view shows a status bar with the position, filename, dimensions,
+zoom level, file size, and photo date:
+
+```text
+[3/42] vacation.jpg (1920x1080) 100% 2.4MB 2026-09-23
+```
+
+Custom `image-info` and `thumb-info` scripts override this text when present.
+
 ### Navigation
 
 - `h`, `j`, `k`, `l` or arrow keys: pan and navigate
@@ -136,6 +156,13 @@ msxiv opens in image mode by default. Use the keyboard to navigate, zoom, and ma
 - `x`: mark or unmark a file
 - `d` then `y` or `n`: move file to Trash with confirmation
 - `;`: run the configured key-handler script
+
+Marked file paths are printed to stdout on quit, so msxiv composes with
+other tools:
+
+```bash
+msxiv ~/Pictures | xargs -I{} cp {} ~/Selected/
+```
 
 ### Slideshow
 
