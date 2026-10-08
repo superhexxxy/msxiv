@@ -2,16 +2,10 @@ class Msxiv < Formula
   desc "Neo Simple X Image Viewer for macOS (Apple Silicon native)"
   homepage "https://github.com/superhexxxy/msxiv"
   url "https://github.com/superhexxxy/msxiv/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "REPLACE_WITH_ACTUAL_SHA256"
+  sha256 "4196218fb2b01ef87b6c55f6134602a6e4abb00b8ed6842fcbfd71ac59f4f127"
   license "WTFPL"
   head "https://github.com/superhexxxy/msxiv.git", branch: "main"
 
-  bottle do
-    root_url "https://github.com/superhexxxy/msxiv/releases/download/v1.0.0"
-    rebuild 1
-    sha256 cellar: :any_skip_relocation, arm64_sonoma: "REPLACE_WITH_ACTUAL_SHA256"
-    sha256 cellar: :any_skip_relocation, arm64_ventura: "REPLACE_WITH_ACTUAL_SHA256"
-  end
 
   depends_on xcode: ["14.0", :build]
   depends_on macos: :ventura
