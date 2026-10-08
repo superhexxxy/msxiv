@@ -148,6 +148,9 @@ cd - >/dev/null
 # install by tap name. (Uninstall first if a previous msxiv exists.)
 say "Testing tap install from source ..."
 brew tap "$GHUSER/tap" 2>/dev/null || true
+# An already-tapped checkout goes stale — pull it, or this installs yesterday's formula.
+git -C "$(brew --repository)/Library/Taps/$GHUSER/homebrew-tap" pull --ff-only >/dev/null 2>&1 \
+  || brew update >/dev/null 2>&1 || true
 brew list msxiv >/dev/null 2>&1 && brew uninstall msxiv || true
 brew install --build-from-source "$GHUSER/tap/msxiv"
 "$(brew --prefix)/bin/msxiv" -h >/dev/null 2>&1 && echo "  smoke test OK"
