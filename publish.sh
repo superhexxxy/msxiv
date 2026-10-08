@@ -28,12 +28,12 @@ command -v brew >/dev/null 2>&1 || { echo "error: brew not found" >&2; exit 1; }
 # --- 1. Brand files with real username ---------------------------------------
 # NOTE: never touch .git internals or this script's own branding logic.
 say "Branding files as $USER ..."
-grep -rl "yourusername" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null | while IFS= read -r f; do
-  sed -i '' "s/yourusername/$USER/g" "$f"
+grep -rl "superhexxxy" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null | while IFS= read -r f; do
+  sed -i '' "s/superhexxxy/$USER/g" "$f"
   echo "  updated $f"
 done || true
-if grep -rq "yourusername" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null; then
-  echo "error: 'yourusername' placeholders remain" >&2; exit 1
+if grep -rq "superhexxxy" -- . --exclude-dir=.git --exclude=publish.sh 2>/dev/null; then
+  echo "error: 'superhexxxy' placeholders remain" >&2; exit 1
 fi
 
 # --- 2. LICENSE (WTFPL — already in repo; fetch only if missing) --------------
