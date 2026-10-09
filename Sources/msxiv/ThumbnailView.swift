@@ -2,7 +2,7 @@ import AppKit
 
 class ThumbnailView: NSView {
     var files: [URL] = [] { didSet { labelStrings.removeAll() } }
-    var markedFiles: Set<URL> = [] { didSet { setNeedsDisplay() } }
+    var markedFiles: Set<URL> = [] { didSet { needsDisplay = true } }
     var selectedIndex: Int = 0
     var thumbnailSize: Int = 128
     var padding: CGFloat = 8
@@ -12,11 +12,11 @@ class ThumbnailView: NSView {
     private var movingWindow = false
     var thumbInfoCache: [String: String] = [:] // Cache for thumb-info script output
     
-    // Redraws are coalesced via setNeedsDisplay(): changes that land while
+    // Redraws are coalesced via needsDisplay = true: changes that land while
     // the view is already dirty skip redundant display-cycle scheduling.
-    var statusInfo: String? { didSet { setNeedsDisplay() } }
-    var defaultInfo: String = "" { didSet { setNeedsDisplay() } }
-    var confirmPrompt: String? { didSet { setNeedsDisplay() } } // When set: red Y/N bar replaces the status bar
+    var statusInfo: String? { didSet { needsDisplay = true } }
+    var defaultInfo: String = "" { didSet { needsDisplay = true } }
+    var confirmPrompt: String? { didSet { needsDisplay = true } } // When set: red Y/N bar replaces the status bar
 
     /// Cached attribute dicts: these were rebuilt per cell on every frame.
     private lazy var labelAttrs: [NSAttributedString.Key: Any] = [

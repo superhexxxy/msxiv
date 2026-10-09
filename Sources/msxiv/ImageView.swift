@@ -15,18 +15,18 @@ enum AppAction {
 class ImageView: NSView {
     static let statusBarHeight: CGFloat = 22
 
-    // Redraws are coalesced via setNeedsDisplay(): a change that lands while
+    // Redraws are coalesced via needsDisplay = true: a change that lands while
     // the view is already dirty skips redundant display-cycle scheduling.
-    var image: CGImage? { didSet { setNeedsDisplay() } }
-    var zoom: CGFloat = 1.0 { didSet { setNeedsDisplay(); onZoomChanged?() } }
-    var offset: CGPoint = .zero { didSet { setNeedsDisplay() } }
-    var rotation: CGFloat = 0.0 { didSet { setNeedsDisplay() } }
+    var image: CGImage? { didSet { needsDisplay = true } }
+    var zoom: CGFloat = 1.0 { didSet { needsDisplay = true; onZoomChanged?() } }
+    var offset: CGPoint = .zero { didSet { needsDisplay = true } }
+    var rotation: CGFloat = 0.0 { didSet { needsDisplay = true } }
     var backgroundColor: NSColor = NSColor(calibratedRed: 0.15, green: 0.15, blue: 0.15, alpha: 1.0)
-    var isMarked: Bool = false { didSet { setNeedsDisplay() } }
+    var isMarked: Bool = false { didSet { needsDisplay = true } }
     
-    var statusInfo: String? { didSet { setNeedsDisplay() } } // Output from image-info script
-    var defaultInfo: String = "" { didSet { setNeedsDisplay() } } // Fallback info string
-    var confirmPrompt: String? { didSet { setNeedsDisplay() } } // When set: red Y/N bar replaces the status bar
+    var statusInfo: String? { didSet { needsDisplay = true } } // Output from image-info script
+    var defaultInfo: String = "" { didSet { needsDisplay = true } } // Fallback info string
+    var confirmPrompt: String? { didSet { needsDisplay = true } } // When set: red Y/N bar replaces the status bar
 
     /// Cached NSString + attributes for the status bar text. The draw path
     /// used to re-bridge and rebuild these every frame.

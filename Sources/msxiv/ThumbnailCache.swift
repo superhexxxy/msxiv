@@ -43,8 +43,6 @@ final class ThumbnailCache {
     /// Uses raw `stat` instead of the much slower FileManager.attributesOfItem,
     /// and hex-encodes via a nibble table instead of per-byte String(format:).
     func cacheKey(for url: URL) -> String {
-        if let memo = keyMemo[url.path] { return memo }
-
         var modTime = "0"
         var info = stat()
         if stat(url.path, &info) == 0 {
@@ -54,16 +52,21 @@ final class ThumbnailCache {
             modTime = "\(info.st_mtim.tv_sec).\(info.st_mtim.tv_nsec)"
             #endif
         }
-        let input = "\(url.path)|\(modTime)"
-        let digest = SHA256.hash(data: Data(input.utf8))
+        // Memoize by path+mtime (never path alone: an edited file must map
+        // to a fresh key, otherwise stale thumbnails stick around forever).
+        let memoKey = "\(url.path)|\(modTime)"
+        if let memo = keyMemo[memoKey] { return memo }
+
+        let digest = SHA256.hash(data: Data(memoKey.utf8))
         var hex = ""
-        hex.reserveCapacity(digest.count * 2)
+        hex.reserveCapacity(SHA256.byteCount * 2)
         let digits: [UInt8] = Array("0123456789abcdef".utf8)
         for byte in digest {
             hex.append(Character(UnicodeScalar(digits[Int(byte >> 4)])))
             hex.append(Character(UnicodeScalar(digits[Int(byte & 0xf)])))
         }
-        keyMemo[url.path] = hex
+        if keyMemo.count > 4096 { keyMemo.removeAll() }
+        keyMemo[memoKey] = hex
         return hex
     }
 
@@ -162,7 +165,10 @@ final class ThumbnailCache {
         if let idx = lruKeys.firstIndex(of: key) { lruKeys.remove(at: idx) }
         failedKeys.remove(key)
         lock.unlock()
-        keyMemo.removeValue(forKey: url.path)
+        // Memo entries are keyed "path|mtime": purge every entry for this
+        // path (a bare-path lookup would never hit).
+        let prefix = url.path + "|"
+        keyMemo = keyMemo.filter { !$0.key.hasPrefix(prefix) }
         try? FileManager.default.removeItem(at: cacheDir.appendingPathComponent("\(key).png"))
     }
 
