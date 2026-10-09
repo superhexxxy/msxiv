@@ -149,7 +149,11 @@ final class ThumbnailCache {
         inflightWaiters[key] = [completion]
         lock.unlock()
 
-        genQueue.async(flags: .barrier) { [weak self] in
+        // NOTE: no .barrier flag — on a concurrent queue it would force
+        // generations to run exclusively (serial), defeating the pool.
+        // Shared state is already guarded by `lock`, and the semaphore caps
+        // concurrency, so plain async is both safe and actually parallel.
+        genQueue.async { [weak self] in
             guard let self = self else { return }
 
             // Block here (on the background pool), not on the caller's thread.

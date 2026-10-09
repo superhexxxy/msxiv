@@ -138,24 +138,17 @@ class AppWindow: NSWindow {
 
     /// Resize the window so the image fits 1:1 (clamped to 92% of the
     /// visible screen). Keeps the window center stable. No-op in fullscreen.
+    ///
+    /// NOTE: the renderer draws the image rect using pixel dims as points
+    /// (a 570px screenshot fills a 570pt window at zoom 1.0), so the window
+    /// must be sized in the same units. Do NOT divide by backingScaleFactor
+    /// here — that would size every window at half scale on Retina and show
+    /// a cropped image. Oversized photos are already handled by the 0.92
+    /// screen clamp below; a 6000px photo can never request a 6000pt window.
     func fitWindowToImage(_ img: CGImage) {
         var w = CGFloat(img.width)
         var h = CGFloat(img.height)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        // Retina-aware: a 6000px photo must not request a 6000pt window —
-        // `shrink` would compute against the point-sized screen and the
-        // result gets clamped to full-screen anyway, jumping the user out
-        // of their layout. Cap by *pixel* capacity (points × backing scale).
-        let scale = backingScaleFactor > 0 ? backingScaleFactor : 2.0
-        if w > screen.width * scale || h > screen.height * scale {
-            let shrink = min(1, (screen.width * 0.8 * scale) / w,
-                             (screen.height * 0.8 * scale) / h)
-            w *= shrink
-            h *= shrink
-        }
-        // Convert back to points for the window frame.
-        w /= scale
-        h /= scale
         let shrink = min(1, (screen.width * 0.92) / w, (screen.height * 0.92) / h)
         w *= shrink
         h *= shrink
