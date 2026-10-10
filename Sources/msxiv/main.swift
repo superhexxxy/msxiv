@@ -1,5 +1,22 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
+
+/// Directory-scan extension list shared by ImageStore and the CLI arg filter:
+/// common web/photo formats PLUS every camera RAW extension (NRAW).
+let msxivValidExtensions: Set<String> = {
+    var s: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "heic", "avif",
+                          "bmp", "tiff", "tif"]
+    s.formUnion(RawSupport.allExtensions)
+    return s
+}()
+
+/// Launch Services image probe for files whose extension isn't on the fast
+/// list (renamed RAW, exotic vendor formats…).
+func msxivIsImageURL(_ url: URL) -> Bool {
+    guard let t = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else { return false }
+    return t.conforms(to: .image) || t.conforms(to: UTType(identifier: "public.camera-raw-image"))
+}
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: AppWindow!

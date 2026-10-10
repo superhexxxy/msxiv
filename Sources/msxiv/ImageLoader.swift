@@ -15,7 +15,16 @@ func msxivBitmapContext(width: Int, height: Int) -> CGContext? {
 
 struct ImageLoader {
     static func load(from url: URL) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+        // RAW magic: camera RAW containers (CR2/NEF/ARW/DNG/…) decode only if
+        // ImageIO recognizes the bytes as an image, which it decides from the
+        // file's UTI. Pass an explicit type hint so extension-identified RAW
+        // files reach Apple's hardware RAW codecs even when Launch Services
+        // hasn't registered them.
+        var sourceOptions: [CFString: Any] = [:]
+        if RawSupport.isRawFile(at: url), let hint = RawSupport.typeHint(for: url) {
+            sourceOptions[kCGImageSourceTypeIdentifierHint] = hint
+        }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary) else {
             return nil
         }
 

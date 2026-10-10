@@ -41,8 +41,18 @@ enum ImageDecoder {
     ///   memory than a full decode — and HEIC/PNG/TIFF/WebP get the same
     ///   bounded result through accelerated tiled decoding. Files already
     ///   smaller than the cap are returned at full native resolution.
+    ///
+    /// Camera RAW files take a dedicated fast lane (see `RawSupport`): the
+    /// embedded JPEG preview is read straight out of the container instead of
+    /// demosaicing Bayer sensor data, and ImageIO gets an explicit type hint
+    /// so every RAW flavor Apple ships a codec for actually decodes.
     static func decodeForDisplay(from url: URL, capPixels: Int) -> DecodedImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        var sourceOptions: [CFString: Any] = [:]
+        let isRaw = RawSupport.isRawFile(at: url)
+        if isRaw, let hint = RawSupport.typeHint(for: url) {
+            sourceOptions[kCGImageSourceTypeIdentifierHint] = hint
+        }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary) else { return nil }
 
         // Header-only property read: gives us native dimensions + EXIF
         // orientation without decoding a single pixel.
@@ -59,9 +69,20 @@ enum ImageDecoder {
             kCGImageSourceCreateThumbnailWithTransform: false,  // we orient ourselves, below
             kCGImageSourceShouldCacheImmediately: true,         // decode now, off the main thread
         ]
-        guard let raw = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-            ?? ImageLoader.load(from: url) // last resort: exotic format with no readable dims
-        else { return nil }
+        // RAW fast lane: sniff the container's embedded JPEG preview first.
+        // Reading a few hundred KB of pre-baked pixels beats letting ImageIO
+        // demosaic tens of megabytes of Bayer data on every navigation key.
+        var rawPreviewUsed = false
+        var raw: CGImage?
+        if isRaw, let preview = RawSupport.decodeEmbeddedPreview(from: url, capPixels: capPixels) {
+            raw = preview
+            rawPreviewUsed = true
+        }
+        if raw == nil {
+            raw = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+                ?? ImageLoader.load(from: url) // last resort: exotic format with no readable dims
+        }
+        guard let raw = raw else { return nil }
 
         // EXIF orientation: applying it to the *downsampled* bitmap is cheap
         // (a few megapixels worst case instead of dozens).
@@ -74,8 +95,17 @@ enum ImageDecoder {
 
         // Swap-aware native dims so they match the oriented output.
         let swapWH = (5...8).contains(orientation)
-        let outNativeW = swapWH ? nativeH : nativeW
-        let outNativeH = swapWH ? nativeW : nativeH
+        var outNativeW = swapWH ? nativeH : nativeW
+        var outNativeH = swapWH ? nativeW : nativeH
+
+        // A RAW container's TIFF header can report the *sensor* dimensions
+        // while the embedded preview we actually decoded is smaller (or even
+        // rotated differently). Trust the preview's own pixels for zoom math
+        // so "100%" matches what is on screen.
+        if rawPreviewUsed {
+            outNativeW = oriented.width
+            outNativeH = oriented.height
+        }
 
         let downsampled = oriented.width < max(1, outNativeW) || oriented.height < max(1, outNativeH)
 

@@ -26,6 +26,9 @@ msxiv provides:
 - slideshow mode with adjustable delay
 - safe delete to Trash with confirmation
 - EXIF auto-orientation for phone and camera photos
+- native camera RAW (NRAW) support: CR2/CR3/NEF/NRW/ARW/SR2/RAF/ORF/RW2/DNG/
+  PEF/X3F/SRW/GPR/R3D/3FR/IIQ/ERF/MRW and more, decoded via Apple's hardware
+  RAW codecs with an embedded-preview fast lane
 - disk-cached thumbnails for instant reopening
 - a borderless window that sizes itself to each image
 - minimal dependencies and no heavy runtime
@@ -275,6 +278,34 @@ msxiv/
 - Platform: macOS 13+
 - Runtime environment: native macOS
 - Dependencies: Apple system frameworks only
+
+### Performance notes (large files & RAW)
+
+- **Bounded display decodes.** Full-screen images are decoded through
+  ImageIO's thumbnail machinery capped at screen resolution × scaling, so a
+  40 MB / 100 MP photo never allocates a full RGBA buffer. JPEGs use native
+  DCT-scale decoding (1/2, 1/4, 1/8) — several times faster and ~16× less
+  memory than a full decode.
+- **Dirty-rect sampling.** The view draws through a deferred `NSImage`
+  handler that clips to the dirty rect, so panning/zooming touches only the
+  visible pixels. EXIF orientation is applied to the *downsampled* bitmap.
+- **Parallel everything.** Decodes run on a bounded background pool with
+  two-slot lookahead prefetch (both directions, cancellable); thumbnail
+  generation and disk-cache prewarm fan out across a concurrent queue; sort
+  keys are precomputed with one raw `stat()` per file.
+- **NRAW fast lane.** Camera RAW files are served from their embedded JPEG
+  preview via a memory-mapped sniff of the TIFF/X3F container headers —
+  milliseconds instead of a Bayer demosaic per navigation keypress — with
+  automatic fallback to ImageIO's hardware RAW codecs (via an explicit UTI
+  type hint) when no preview is present.
+
+### Supported camera RAW formats
+
+Canon CR2/CR3/CRW · Nikon NEF/NRW · Sony ARW/SR2/SRF · Fujifilm RAF ·
+Olympus ORF · Panasonic RW2/RWL · Adobe/Leica/Hasselblad DNG · Pentax PEF/PTX ·
+Sigma X3F · Samsung SRW · GoPro GPR · RED R3D · Hasselblad 3FR · Phase One IIQ ·
+Epson ERF · Minolta MRW · Kodak KDC/KC2/DCS · Casio CINE · Nokia NRY — plus any
+file Launch Services classifies as `public.camera-raw-image`.
 
 ## Troubleshooting
 
