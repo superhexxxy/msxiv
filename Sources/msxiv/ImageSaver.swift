@@ -9,7 +9,13 @@ struct ImageSaver {
     static func rotateCW(_ url: URL, quarterTurns: Int) -> Bool {
         let turns = ((quarterTurns % 4) + 4) % 4
         guard turns != 0 else { return true }
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+        // RAW magic: hint ImageIO with the file's UTI so camera RAW containers
+        // are readable at all (same trick as the decode paths).
+        var sourceOptions: [CFString: Any] = [:]
+        if RawSupport.isRawFile(at: url), let hint = RawSupport.typeHint(for: url) {
+            sourceOptions[kCGImageSourceTypeIdentifierHint] = hint
+        }
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
               var img = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCache: true] as CFDictionary)
         else { return false }
 
@@ -18,7 +24,12 @@ struct ImageSaver {
             img = r
         }
 
-        let uti = (CGImageSourceGetType(src) as String?) ?? "public.png"
+        var uti = (CGImageSourceGetType(src) as String?) ?? "public.png"
+        // Never re-encode a camera RAW container back through its RAW codec —
+        // bake the rotation into a JPEG instead (RAW has no writable encoder).
+        if RawSupport.isRawExtension(url.pathExtension) || uti.contains("raw") {
+            uti = "public.jpeg"
+        }
 
         // Carry the original metadata (EXIF incl. DateTimeOriginal, GPS, ICC
         // profile, color info) through the re-encode so rotation-save doesn't
