@@ -23,8 +23,41 @@ class ImageView: NSView {
 
     // Redraws are coalesced via needsDisplay = true: a change that lands while
     // the view is already dirty skips redundant display-cycle scheduling.
-    var image: CGImage? { didSet { needsDisplay = true } }
-    var zoom: CGFloat = 1.0 { didSet { needsDisplay = true; onZoomChanged?() } }
+
+    /// The current image. `nsImage` is drawn through a deferred handler so
+    /// only the dirty rect is ever sampled; `image` (a possibly downsampled
+    /// decode) backs the fit/zoom math and window sizing; `nativeSize` is the
+    /// file's true pixel size, used for zoom-percentage display so "100%"
+    /// always means real device pixels even when we hold fewer.
+    var image: CGImage?
+    var nsImage: NSImage? { didSet { needsDisplay = true } }
+    var nativeSize: CGSize = .zero
+    /// True when the held bitmap is smaller than the file's native size.
+    var isDownsampled: Bool = false
+    var zoom: CGFloat = 1.0 {
+        didSet {
+            needsDisplay = true
+            onZoomChanged?()
+            // Zooming into a downsampled bitmap beyond its own pixel grid
+            // would just magnify blur; ask for a full-res decode once.
+            if isDownsampled, image != nil,
+               zoom * max(1, nativeScale) >= 1.0 {
+                onRequestFullResDecode?()
+            }
+        }
+    }
+
+    /// Ratio of held bitmap pixels to the file's native pixels (< 1 while
+    /// the image is a downsampled decode).
+    private var nativeScale: CGFloat {
+        guard let img = image, nativeSize.width > 0 else { return 1 }
+        return CGFloat(img.width) / nativeSize.width
+    }
+
+    /// Zoom relative to the pixels actually on screen — what the status bar
+    /// should report. `zoom` itself is always native-relative so layout math
+    /// stays consistent across re-decodes.
+    var effectiveZoom: CGFloat { zoom / max(0.0001, nativeScale) }
     var offset: CGPoint = .zero { didSet { needsDisplay = true } }
     var rotation: CGFloat = 0.0 { didSet { needsDisplay = true } }
     var backgroundColor: NSColor = NSColor(calibratedRed: 0.15, green: 0.15, blue: 0.15, alpha: 1.0)
@@ -57,6 +90,20 @@ class ImageView: NSView {
         return ns
     }
     
+    /// Image extent in view points (native size when known — the held bitmap
+    /// may be a downsampled decode of a huge file).
+    var displaySize: CGSize {
+        if nativeSize.width > 0, nativeSize.height > 0 { return nativeSize }
+        if let img = image { return CGSize(width: img.width, height: img.height) }
+        if let ns = nsImage { return ns.size }
+        return .zero
+    }
+
+    /// Fired when the user zooms past what the downsampled decode can show
+    /// at 1:1 — AppDelegate re-decodes the current file at full resolution
+    /// so "100%" always means real pixels (nsxiv's on-demand upscale).
+    var onRequestFullResDecode: (() -> Void)?
+
     var onAction: ((AppAction) -> Void)?
     var onZoomChanged: (() -> Void)?
     
@@ -68,8 +115,20 @@ class ImageView: NSView {
         backgroundColor.setFill()
         ctx.fill(bounds)
         
-        guard let image = image else { return }
-        
+        // Prefer the deferred NSImage: its drawing handler samples only the
+        // pixels inside the (clipped, transformed) dirty rect — panning a
+        // 100-megapixel photo repaints a window-sized slice, not the whole
+        // bitmap. Fall back to the raw CGImage if none is set.
+        guard nsImage != nil || image != nil else { return }
+
+        // Image extent in view points. With a downsampled decode we scale
+        // the smaller bitmap back up to native size so zoom semantics stay
+        // identical no matter what resolution we actually hold.
+        let heldW = CGFloat(image?.width ?? Int(nativeSize.width))
+        let heldH = CGFloat(image?.height ?? Int(nativeSize.height))
+        let dispW = nativeSize.width > 0 ? nativeSize.width : heldW
+        let dispH = nativeSize.height > 0 ? nativeSize.height : heldH
+
         ctx.saveGState()
         // Center in the area ABOVE the status bar so the bar never covers
         // pixels (full height when the bar is hidden via status_bar=false).
@@ -78,10 +137,22 @@ class ImageView: NSView {
         ctx.rotate(by: rotation * .pi / 180.0)
         ctx.scaleBy(x: zoom, y: zoom)
         ctx.translateBy(x: offset.x, y: offset.y)
-        
-        let imgRect = CGRect(x: -Double(image.width) / 2.0, y: -Double(image.height) / 2.0,
-                             width: Double(image.width), height: Double(image.height))
-        ctx.draw(image, in: imgRect)
+
+        let imgRect = CGRect(x: -dispW / 2.0, y: -dispH / 2.0, width: dispW, height: dispH)
+        // Clip to the image itself: the dirty rect AppKit hands us can be
+        // much larger than the visible image (e.g. after a resize), and
+        // without this clip the deferred handler would sample far more
+        // pixels than needed.
+        ctx.clip(to: imgRect)
+        // Interpolation quality: cheap filtering while magnifying a
+        // downsampled bitmap, smooth shrink filtering, exact at 1:1.
+        ctx.interpolationQuality = zoom < 1.0 ? .high : (isDownsampled ? .medium : .none)
+        if let ns = nsImage {
+            ns.draw(in: imgRect, from: .zero, operation: .sourceOver, fraction: 1.0,
+                    respectFlipped: true, hints: nil)
+        } else if let img = image {
+            ctx.draw(img, in: imgRect)
+        }
         ctx.restoreGState()
         
         if isMarked {

@@ -44,7 +44,9 @@ struct ImageLoader {
         return o
     }
 
-    private static func applyingExifOrientation(_ orientation: Int, to image: CGImage) -> CGImage? {
+    /// Shared with ImageDecoder: EXIF-orienting a *downsampled* bitmap is
+    /// far cheaper than orienting the full-resolution decode.
+    static func applyingExifOrientation(_ orientation: Int, to image: CGImage) -> CGImage? {
         let w = image.width
         let h = image.height
         // Orientations 5-8 swap width/height
