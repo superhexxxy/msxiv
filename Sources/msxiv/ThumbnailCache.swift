@@ -128,20 +128,66 @@ final class ThumbnailCache {
         keyMemoInsertionOrder.removeAll { $0.hasPrefix(prefix) }
     }
 
-    /// Try memory cache first, then disk cache.
+    /// Memory-cache probe ONLY — safe to call on the main thread; never
+    /// touches the disk. A miss returns nil so callers fall through to
+    /// `generateAndCache`, which loads from disk on the background pool.
+    /// (The old synchronous version ran stat + SHA-256 + PNG decode inline;
+    /// with hundreds of cells that was enough to beachball the app the
+    /// moment thumbnail mode opened.)
     func cachedThumbnail(for url: URL) -> CGImage? {
         let key = cacheKey(for: url)
-
         lock.lock()
+        defer { lock.unlock() }
         if let img = memoryCache[key] {
             touchLRU(key)
-            lock.unlock()
             return img
         }
-        lock.unlock()
+        return nil
+    }
 
-        // Disk hit. Thumbnail-sized PNGs decode quickly; keep it synchronous
-        // (instant display, no flicker) but bound concurrent disk reads.
+    /// Background-load every already-cached thumbnail for `files` into the
+    /// memory cache in one batch. Called when entering thumbnail mode: the
+    /// grid can then paint hundreds of cells from RAM instead of each cell
+    /// independently hitting stat + SHA-256 + PNG decode on first sight.
+    /// Missing entries are simply skipped (normal generation path handles
+    /// them); completion is delivered on the main thread, possibly several
+    /// times if prewarm runs again while an earlier batch is still going —
+    /// callers must treat it as "cache got warmer", not "all done".
+    func prewarm(files: [URL], maxSize: Int, completion: @escaping () -> Void) {
+        guard !files.isEmpty else {
+            DispatchQueue.main.async { completion() }
+            return
+        }
+        genQueue.async { [weak self] in
+            guard let self = self else { return }
+            // Snapshot keys off-main; stat cost is O(n) cheap syscalls.
+            var keys: [(String, URL)] = []
+            keys.reserveCapacity(files.count)
+            for f in files { keys.append((self.cacheKey(for: f), f)) }
+
+            var loaded = 0
+            for (key, _) in keys {
+                // Skip work if the entry is already resident.
+                self.lock.lock()
+                let have = self.memoryCache[key] != nil
+                self.lock.unlock()
+                if have { continue }
+                if self.loadDiskThumbnail(forKey: key) != nil {
+                    loaded += 1
+                    // Refresh the view periodically so cells appear as they
+                    // warm instead of all at the very end.
+                    if loaded % 48 == 0 {
+                        DispatchQueue.main.async { completion() }
+                    }
+                }
+            }
+            DispatchQueue.main.async { completion() }
+        }
+    }
+
+    /// Load a previously-generated thumbnail straight from the disk cache
+    /// (background pool only). Returns nil when nothing is cached.
+    private func loadDiskThumbnail(forKey key: String) -> CGImage? {
         ioSemaphore.wait()
         defer { ioSemaphore.signal() }
         let diskURL = cacheDir.appendingPathComponent("\(key).png")
@@ -189,7 +235,10 @@ final class ThumbnailCache {
             // Block here (on the background pool), not on the caller's thread.
             self.genSemaphore.wait()
 
-            let thumb = ThumbnailGenerator.generate(from: url, maxSize: maxSize)
+            // Cheap path first: a previous run already rendered this exact
+            // file+mtime — read the tiny PNG instead of decoding the source.
+            let thumb = self.loadDiskThumbnail(forKey: key)
+                ?? ThumbnailGenerator.generate(from: url, maxSize: maxSize)
 
             if let thumb = thumb {
                 // Save to disk via temp file + atomic replace so readers never

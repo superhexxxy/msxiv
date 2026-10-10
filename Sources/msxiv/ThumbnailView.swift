@@ -51,6 +51,36 @@ class ThumbnailView: NSView {
     
     override var acceptsFirstResponder: Bool { true }
     
+    /// Cell-local invalidation used by async thumbnail completions. Guarded
+    /// so a view that is detached from its window (mode switched away)
+    /// doesn't compute rects against a stale frame.
+    private func markCellNeedsDisplay(_ index: Int) {
+        guard window != nil, index >= 0, index < files.count else { return }
+        setNeedsDisplay(cellRect(for: index))
+    }
+
+    /// Keep the in-memory thumbnail working set bounded: with thousands of
+    /// files, unbounded CGImage retention grows steadily while scrolling.
+    /// Entries whose file is currently visible or near-visible survive.
+    private func trimThumbnails() {
+        let cols = columns
+        let cSize = cellSize
+        guard cols > 0, frame.height > 0, thumbnails.count > maxMemoryThumbs else { return }
+        let topY = frame.height - topPad
+        let vis = visibleRect.insetBy(dx: -cSize * 3, dy: -cSize * 3)
+        let r0 = max(0, min(Int((topY - vis.maxY) / cSize), (files.count - 1) / cols))
+        let r1 = max(0, min(Int((topY - vis.minY) / cSize), (files.count - 1) / cols))
+        let keepRange = (r0 * cols)..<(min(r1 * cols + cols, files.count))
+        for (i, url) in thumbURLs where thumbnails[i] != nil {
+            if keepRange.contains(i) { continue }
+            // Also keep marked/selected cells hot: they're visually prominent.
+            if i == selectedIndex || markedFiles.contains(url) { continue }
+            thumbnails.removeValue(forKey: i)
+            thumbURLs.removeValue(forKey: i)
+        }
+    }
+    private let maxMemoryThumbs = 1024
+
     private var cellSize: CGFloat { CGFloat(thumbnailSize) + padding * 2 }
     private var columns: Int { max(1, Int(bounds.width / cellSize)) }
     private var rows: Int { files.isEmpty ? 0 : Int(ceil(Double(files.count) / Double(columns))) }
@@ -188,7 +218,7 @@ class ThumbnailView: NSView {
             thumbURLs[index] = file
             pendingRequests.remove(index)
             pendingRequestURLs.removeValue(forKey: index)
-            needsDisplay = true
+            markCellNeedsDisplay(index)
             return
         }
         ThumbnailCache.shared.generateAndCache(for: file, maxSize: thumbnailSize) { [weak self] img in
@@ -201,7 +231,7 @@ class ThumbnailView: NSView {
             self.thumbnails[cur] = img
             self.thumbURLs[cur] = file
             // Only invalidate the one cell that changed, not the whole grid.
-            self.setNeedsDisplay(self.cellRect(for: cur))
+            self.markCellNeedsDisplay(cur)
         }
     }
     
@@ -243,7 +273,7 @@ class ThumbnailView: NSView {
                         // made: resolve the file's current index instead of
                         // trusting the captured loop index `i`.
                         if let cur = self.files.firstIndex(of: file) {
-                            self.setNeedsDisplay(self.cellRect(for: cur))
+                            self.markCellNeedsDisplay(cur)
                         }
                     }
                 }
@@ -308,6 +338,33 @@ class ThumbnailView: NSView {
         _ = scrollToVisible(expanded)
     }
     
+    /// Preload newly exposed rows while scrolling (not just at rest): by the
+    /// time a row enters the viewport its thumbnail is usually already in
+    /// the memory cache, so fast flicks show images instead of gray boxes.
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if let token = scrollObserver {
+            NotificationCenter.default.removeObserver(token)
+            scrollObserver = nil
+        }
+        guard let scroll = superview as? NSScrollView else { return }
+        // The flag lives on the clip view's *enclosing* scroll view; bounds
+        // changes are still posted by the contentView.
+        scroll.contentView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scroll.contentView,
+            queue: .main) { [weak self] _ in
+                guard let self = self, self.window != nil else { return }
+                self.preloadVisible()
+                self.trimThumbnails()
+            }
+    }
+    deinit {
+        if let token = scrollObserver { NotificationCenter.default.removeObserver(token) }
+    }
+    private var scrollObserver: NSObjectProtocol?
+
     override func resize(withOldSuperviewSize oldSize: NSSize) {
         super.resize(withOldSuperviewSize: oldSize)
         updateFrameHeight()

@@ -150,9 +150,11 @@ class AppWindow: NSWindow {
     /// here — that would size every window at half scale on Retina and show
     /// a cropped image. Oversized photos are already handled by the 0.92
     /// screen clamp below; a 6000px photo can never request a 6000pt window.
-    func fitWindowToImage(_ img: CGImage) {
-        var w = CGFloat(img.width)
-        var h = CGFloat(img.height)
+    func fitWindowToImageSize(_ size: CGSize) {
+        // Native pixel dims: the held bitmap may be downsampled, but the
+        // window must still frame the image's true size.
+        var w = size.width
+        var h = size.height
         // The renderer reserves ImageView.statusBarHeight of content height
         // for the status bar; include it so a 100%-zoom image fits exactly.
         if imageView.showsStatusBar {

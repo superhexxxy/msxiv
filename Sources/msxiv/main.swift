@@ -115,6 +115,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupCallbacks() {
         window.imageView.onAction = { [weak self] action in self?.handleImageAction(action) }
         window.imageView.onZoomChanged = { [weak self] in self?.updateImageInfo() }
+        // Zooming past the downsampled bitmap's own resolution: swap in a
+        // full-resolution decode of the same file, keeping zoom/offset/rotation.
+        window.imageView.onRequestFullResDecode = { [weak self] in
+            guard let self = self else { return }
+            // One shot per image: clear the flag first so a failed or
+            // unchanged re-decode can't loop.
+            self.window.imageView.isDownsampled = false
+            self.loadImage(capPixelsOverride: .max, keepViewTransform: true)
+        }
         
         window.thumbnailView.onSelect = { [weak self] index in
             self?.imageStore.currentIndex = index
@@ -157,12 +166,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var loadToken: UInt64 = 0
     /// Lookahead/behind cache: pressing next/prev shows instantly. Keyed by
     /// index+URL so a shifted list (delete) can never serve a wrong image.
-    private var prefetchCache: [Int: (url: URL, image: CGImage?)] = [:]
+    private var prefetchCache: [Int: (url: URL, image: DecodedImage?)] = [:]
 
-    func loadImage() {
+    /// Shared decode pool. One process-wide pool with an explicit worker
+    /// cap keeps memory bounded even when many huge files are in flight —
+    /// per-image full-res buffers no longer exist, so this is plenty.
+    private static let decodePool: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount / 2))
+        return q
+    }()
+
+    /// Long-edge cap for display decodes, in *pixels* (not points): covers
+    /// fullscreen on Retina with headroom for zooming to ~100%. JPEGs still
+    /// decode at native DCT scale, so this stays dramatically cheaper than a
+    /// full decode for the 40MB+ photos that used to stall navigation.
+    private var displayCapPixels: Int {
+        let screen = NSScreen.main
+        let scale = screen?.backingScaleFactor ?? 2.0
+        let f = screen?.frame.size ?? CGSize(width: 1600, height: 1000)
+        let longEdge = max(f.width, f.height) * scale
+        return max(2560, Int(longEdge * 1.5))
+    }
+
+    func loadImage(capPixelsOverride: Int? = nil, keepViewTransform: Bool = false) {
         guard let url = imageStore.currentFile else { return }
         let index = imageStore.currentIndex
         let token = { loadToken += 1; return loadToken }()
+        let cap = capPixelsOverride ?? displayCapPixels
+        // Whatever decode was running for the *previous* image is now moot.
+        foregroundOp?.cancel()
+        foregroundOp = nil
 
         // Start watching this file for modifications
         fileWatcher.watch(file: url) { [weak self] in
@@ -171,9 +205,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Fast path: the prefetch already decoded this exact file. On a hit,
         // re-kick the lookahead window so continuous browsing stays instant.
-        if let p = prefetchCache[index], p.url == url {
+        if let p = prefetchCache[index], p.url == url,
+           capPixelsOverride == nil || !(p.image?.downsampled ?? false) {
             prefetchCache[index] = nil
-            applyLoadedImage(p.image, url: url, token: token)
+            applyLoadedImage(p.image, url: url, token: token, keepViewTransform: keepViewTransform)
             updatePrefetchWindow(around: index)
             return
         }
@@ -182,32 +217,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // delete shifted the list) so it can't be served later.
         prefetchCache[index] = nil
 
+        // If a prefetch of this exact file is still queued/running, cancel
+        // it and take over the dedupe slot ourselves. The canceled op's
+        // completion clears `decodingInFlight` only while its own sentinel
+        // (0) is still stored there — once we stamp our token below, that
+        // cleanup becomes a no-op and our entry survives until our decode
+        // finishes. No duplicate decode of the same bytes, ever.
+        for (n, pair) in prefetchOps where pair.url == url {
+            pair.op.cancel()
+            prefetchOps.removeValue(forKey: n)
+            prefetchInFlight.remove(n)
+        }
+        decodingInFlight[url.path] = token
+
         // Decode off the main thread so the UI stays responsive on huge images.
-        DispatchQueue.global(qos: .userInteractive).async {
-            let cgImage = ImageLoader.load(from: url)
+        // The block is attached after init so it can reference its own
+        // operation (weakly — no retain cycle) for cooperative cancellation.
+        let op = BlockOperation()
+        op.addExecutionBlock { [weak self, weak op] in
+            guard let self = self, let operation = op else { return }
+            if operation.isCancelled {
+                DispatchQueue.main.async {
+                    if self.decodingInFlight[url.path] == token {
+                        self.decodingInFlight[url.path] = nil
+                    }
+                }
+                return
+            }
+            let decoded = ImageDecoder.decodeForDisplay(from: url, capPixels: cap)
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, self.loadToken == token else { return }
-                self.applyLoadedImage(cgImage, url: url, token: token)
+                guard let self = self else { return }
+                if self.decodingInFlight[url.path] == token {
+                    self.decodingInFlight[url.path] = nil
+                }
+                guard self.loadToken == token else { return }
+                if self.foregroundOp === operation { self.foregroundOp = nil }
+                self.applyLoadedImage(decoded, url: url, token: token,
+                                      keepViewTransform: keepViewTransform)
             }
         }
+        op.queuePriority = .veryHigh
+        foregroundOp = op
+        Self.decodePool.addOperation(op)
         updatePrefetchWindow(around: index)
     }
+    /// Path -> token of the decode currently running for that file, so a
+    /// navigation onto a file whose prefetch is still in flight never spawns
+    /// a duplicate full decode of the same bytes.
+    private var decodingInFlight: [String: UInt64] = [:]
 
-    private func applyLoadedImage(_ cgImage: CGImage?, url: URL, token: UInt64) {
+    private func applyLoadedImage(_ decoded: DecodedImage?, url: URL, token: UInt64,
+                                  keepViewTransform: Bool = false) {
         guard loadToken == token else { return }
-        if let cgImage = cgImage {
-            window.imageView.image = cgImage
-            window.imageView.zoom = 1.0
-            window.imageView.offset = .zero
-            window.imageView.rotation = 0.0
-            window.imageView.isMarked = imageStore.isCurrentMarked
-            window.imageView.statusInfo = nil // Reset script output
+        if let decoded = decoded {
+            guard let iv = window.imageView else { return }
+            iv.image = decoded.cgImage
+            iv.nsImage = decoded.nsImage
+            iv.nativeSize = CGSize(width: decoded.nativeWidth, height: decoded.nativeHeight)
+            iv.isDownsampled = decoded.downsampled
+            if !keepViewTransform {
+                iv.zoom = 1.0
+                iv.offset = .zero
+                iv.rotation = 0.0
+                window.fitWindowToImageSize(CGSize(width: decoded.nativeWidth,
+                                                   height: decoded.nativeHeight))
+            }
+            iv.isMarked = imageStore.isCurrentMarked
+            iv.statusInfo = nil // Reset script output
 
-            window.fitWindowToImage(cgImage)
             updateImageInfo()
             runImageScripts(for: url)
         } else {
             window.imageView.image = nil
+            window.imageView.nsImage = nil
             window.title = "msxiv - (failed to load \(url.lastPathComponent))"
         }
     }
@@ -218,20 +300,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// spawn duplicate decodes; stale results are dropped on completion.
     private func updatePrefetchWindow(around index: Int) {
         let files = imageStore.files
-        // Forget in-flight slots from a previous window: if they still decode,
-        // their completion will fail the freshness check and be discarded.
-        prefetchInFlight.removeAll()
+        // Cancel decodes outside the new window FIRST: rapid arrow-key
+        // navigation used to pile up obsolete 40MB decodes behind the ones
+        // that actually mattered. In-window ops survive and are re-tracked.
+        var survivors: Set<Int> = []
+        var survivorOps: [Int: BlockOperation] = [:]
+        for (n, pair) in prefetchOps {
+            if abs(n - index) <= 1 && n >= 0 && n < files.count && files[n] == pair.url {
+                survivors.insert(n)
+                survivorOps[n] = pair.op
+            } else {
+                pair.op.cancel()
+            }
+        }
+        prefetchOps = [:]
+        for n in survivors { prefetchOps[n] = (files[n], survivorOps[n]!) }
+        prefetchInFlight = survivors
 
+        let cap = displayCapPixels
         for n in [index - 1, index + 1] {
             guard n >= 0, n < files.count else { continue }
             guard prefetchCache[n] == nil, !prefetchInFlight.contains(n) else { continue }
             let url = files[n]
+            // Foreground decode for this exact file already running: skip.
+            if decodingInFlight[url.path] != nil { continue }
             prefetchInFlight.insert(n)
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                guard let self = self else { return }
-                let img = ImageLoader.load(from: url)
+            // Claim the dedupe slot BEFORE enqueuing: addOperation may start
+            // the block synchronously on another thread, and the foreground
+            // path relies on this entry existing the moment we return.
+            decodingInFlight[url.path] = 0  // 0 never equals a real token
+            let op = BlockOperation()
+            op.addExecutionBlock { [weak self, weak op] in
+                guard let self = self, let operation = op else { return }
+                if operation.isCancelled {
+                    DispatchQueue.main.async {
+                        self.forgetPrefetch(n, url: url)
+                        // Hand the slot back unless someone (a foreground
+                        // takeover) already re-stamped it with their token.
+                        if self.decodingInFlight[url.path] == 0 {
+                            self.decodingInFlight[url.path] = nil
+                        }
+                    }
+                    return
+                }
+                // NOTE: no freshness check here — this block runs on the
+                // pool thread and must not touch main-thread-owned store
+                // state (data race). The main-thread completion below owns
+                // all freshness decisions; a redundant decode is harmless.
+                let img = ImageDecoder.decodeForDisplay(from: url, capPixels: cap)
                 DispatchQueue.main.async {
-                    self.prefetchInFlight.remove(n)
+                    self.forgetPrefetch(n, url: url)
+                    // Release the dedupe slot only if we still own it (our
+                    // sentinel); a foreground takeover stamped its token.
+                    if self.decodingInFlight[url.path] == 0 {
+                        self.decodingInFlight[url.path] = nil
+                    }
+                    if operation.isCancelled { return }
                     // Keep it only while we're still viewing one of its
                     // neighbors and nobody filled this slot meanwhile.
                     let cur = self.imageStore.currentIndex
@@ -241,21 +365,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+            op.queuePriority = .low
+            prefetchOps[n] = (url, op)
+            Self.decodePool.addOperation(op)
         }
     }
     private var prefetchInFlight: Set<Int> = []
+    /// Live prefetch operations, so navigating away can cancel them instead
+    /// of letting stale 40MB decodes hog the pool.
+    private var prefetchOps: [Int: (url: URL, op: BlockOperation)] = [:]
+    /// The foreground decode operation, cancellable when the user navigates
+    /// on before it finishes (spinning on one huge file shouldn't delay the
+    /// next one — the new request preempts it outright).
+    private var foregroundOp: BlockOperation?
+
+    private func forgetPrefetch(_ n: Int, url: URL) {
+        prefetchInFlight.remove(n)
+        if prefetchOps[n]?.url == url { prefetchOps[n] = nil }
+    }
     
     func updateImageInfo() {
-        guard let url = imageStore.currentFile, let img = window.imageView.image else { return }
+        guard let url = imageStore.currentFile,
+              window.imageView.image != nil || window.imageView.nsImage != nil else { return }
         let slideshow: String? = slideshowTimer != nil
             ? "▶slideshow \(String(format: "%.1f", slideshowDelay))s" : nil
+        let native = window.imageView.nativeSize
         window.imageView.defaultInfo = ImageInfo.format(
             index: imageStore.currentIndex,
             total: imageStore.files.count,
             filename: url.lastPathComponent,
-            width: img.width,
-            height: img.height,
-            zoom: window.imageView.zoom,
+            width: Int(native.width),
+            height: Int(native.height),
+            zoom: window.imageView.effectiveZoom,
             fileSize: ImageInfo.fileSize(for: url),
             dateTaken: ImageInfo.photoDate(for: url),
             slideshow: slideshow
@@ -319,10 +460,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .rotate:
             window.imageView.rotation += 90
         case .fit:
-            guard let img = window.imageView.image, let cv = window.contentView else { return }
-            let scaleX = cv.bounds.width / CGFloat(img.width)
-            let availH = cv.bounds.height - ImageView.statusBarHeight
-            let scaleY = availH / CGFloat(img.height)
+            guard window.imageView.nsImage != nil || window.imageView.image != nil,
+                  let cv = window.contentView else { return }
+            let size = window.imageView.displaySize
+            let scaleX = cv.bounds.width / size.width
+            let availH = cv.bounds.height - (window.imageView.showsStatusBar ? ImageView.statusBarHeight : 0)
+            let scaleY = availH / size.height
             window.imageView.zoom = min(scaleX, scaleY)
             window.imageView.offset = .zero
             updateImageInfo()
@@ -374,10 +517,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .toggleFullscreen:
             window.toggleFullScreen(nil)
         case .fitWindow:
-            if let img = window.imageView.image {
+            let size = window.imageView.displaySize
+            if size.width > 0, size.height > 0 {
                 window.imageView.zoom = 1.0
                 window.imageView.offset = .zero
-                window.fitWindowToImage(img)
+                window.fitWindowToImageSize(size)
                 updateImageInfo()
             }
         }
@@ -426,7 +570,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Any decode of the deleted file may still be in flight; drop the
         // whole prefetch window and re-key it against the shifted list below.
         prefetchCache.removeAll()
+        for (_, pair) in prefetchOps { pair.op.cancel() }
+        prefetchOps.removeAll()
         prefetchInFlight.removeAll()
+        foregroundOp?.cancel()
+        foregroundOp = nil
+        decodingInFlight.removeAll()
 
         if imageStore.files.isEmpty {
             fileWatcher.stop()
@@ -542,6 +691,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func enterThumbnailMode() {
         stopSlideshow()
         fileWatcher.stop()
+        // Pending display decodes are useless now and would compete with
+        // thumbnail generation for the shared pool — cancel them.
+        for (_, pair) in prefetchOps { pair.op.cancel() }
+        prefetchOps.removeAll()
+        prefetchInFlight.removeAll()
+        foregroundOp?.cancel()
+        foregroundOp = nil
+        decodingInFlight.removeAll()
+        loadToken += 1
+
+        // Warm the memory cache from disk ONCE, off the main thread, while
+        // the grid paints. With hundreds of cells this turns scrolling into
+        // mostly memory hits instead of a thundering herd of disk reads +
+        // huge-source decodes — the freeze users saw pressing `t` on a
+        // folder of 40MB photos.
+        ThumbnailCache.shared.prewarm(files: imageStore.files,
+                                      maxSize: window.thumbnailView.thumbnailSize) { [weak self] in
+            self?.window.thumbnailView.preloadVisible()
+        }
+
         window.thumbnailView.files = imageStore.files
         window.thumbnailView.markedFiles = imageStore.markedFiles
         window.thumbnailView.selectedIndex = imageStore.currentIndex
