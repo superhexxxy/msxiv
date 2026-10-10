@@ -52,6 +52,11 @@ class AppWindow: NSWindow {
 
         // Start in image mode
         self.contentView?.addSubview(self.imageView)
+
+        // Honor `status_bar = false` from the config (ImageView skips both
+        // drawing and layout reservation when this is off).
+        self.imageView.showsStatusBar = config.statusBar
+        self.thumbnailView.showsStatusBar = config.statusBar
     }
 
     deinit {
@@ -148,6 +153,11 @@ class AppWindow: NSWindow {
     func fitWindowToImage(_ img: CGImage) {
         var w = CGFloat(img.width)
         var h = CGFloat(img.height)
+        // The renderer reserves ImageView.statusBarHeight of content height
+        // for the status bar; include it so a 100%-zoom image fits exactly.
+        if imageView.showsStatusBar {
+            h += ImageView.statusBarHeight
+        }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let shrink = min(1, (screen.width * 0.92) / w, (screen.height * 0.92) / h)
         w *= shrink

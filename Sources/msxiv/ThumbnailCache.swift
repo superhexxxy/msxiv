@@ -18,7 +18,18 @@ final class ThumbnailCache {
     // True LRU memory cache guarded by `lock`. Recency is tracked with an
     // intrusive doubly-linked list (O(1) touch/evict) plus a key→node map,
     // instead of an array whose search+remove was O(n) per hit.
-    private let lock = NSLock()
+    //
+    // The lock is a RECURSIVE mutex: `cacheKey(for:)` takes it internally and
+    // is called from other locked regions (`invalidateMemos(forPath:)` runs
+    // inside `remove(for:)`'s critical section). A plain NSLock would deadlock
+    // on the nested acquisition.
+    //
+    // EVERY access to shared mutable state — memoryCache/LRU, failedKeys,
+    // inflight maps, AND keyMemo/keyMemoInsertionOrder — must happen under
+    // this lock. Generation callbacks run on a concurrent dispatch pool and
+    // redraws run on the main thread, so unguarded dictionary access here
+    // was a data race (potential crash / corrupted cache keys).
+    private let lock = NSRecursiveLock()
     private final class LRUNode {
         let key: String
         var prev: LRUNode?
@@ -58,6 +69,9 @@ final class ThumbnailCache {
     /// Generate a stable cache key from file path + modification date.
     /// Uses raw `stat` instead of the much slower FileManager.attributesOfItem,
     /// and hex-encodes via a nibble table instead of per-byte String(format:).
+    ///
+    /// Thread-safe: the memo tables are guarded by `lock` (this method is
+    /// called from both the main thread and the concurrent generation pool).
     func cacheKey(for url: URL) -> String {
         var modTime = "0"
         var info = stat()
@@ -71,6 +85,10 @@ final class ThumbnailCache {
         // Memoize by path+mtime (never path alone: an edited file must map
         // to a fresh key, otherwise stale thumbnails stick around forever).
         let memoKey = "\(url.path)|\(modTime)"
+
+        lock.lock()
+        defer { lock.unlock() }
+
         if let memo = keyMemo[memoKey] { return memo }
 
         let digest = SHA256.hash(data: Data(memoKey.utf8))
@@ -81,7 +99,7 @@ final class ThumbnailCache {
             hex.append(Character(UnicodeScalar(digits[Int(byte >> 4)])))
             hex.append(Character(UnicodeScalar(digits[Int(byte & 0xf)])))
         }
-        if keyMemo.count >= maxKeyMemo { evictKeyMemoBatch() }
+        if keyMemo.count >= maxKeyMemo { evictKeyMemoBatchLocked() }
         keyMemo[memoKey] = hex
         keyMemoInsertionOrder.append(memoKey)
         return hex
@@ -89,13 +107,25 @@ final class ThumbnailCache {
 
     /// Evict a bounded FIFO batch of memo entries instead of flushing the
     /// whole table, so eviction cost is amortized and never spikes.
-    private func evictKeyMemoBatch() {
+    /// Must be called with `lock` held.
+    private func evictKeyMemoBatchLocked() {
         let removeCount = min(keyMemoEvictBatch, keyMemoInsertionOrder.count)
         guard removeCount > 0 else { keyMemo.removeAll(); return }
         for old in keyMemoInsertionOrder.prefix(removeCount) {
             keyMemo.removeValue(forKey: old)
         }
         keyMemoInsertionOrder.removeFirst(removeCount)
+    }
+
+    /// Drop every memo entry for `path` (any "|mtime" suffix). Called when a
+    /// file changes or disappears while msxiv runs, so a later lookup can
+    /// never reuse a key derived from a stale mtime — or worse, from a failed
+    /// stat ("mtime 0") that would alias a brand-new file at the same path.
+    /// Must be called with `lock` held.
+    private func invalidateMemos(forPath path: String) {
+        let prefix = path + "|"
+        keyMemo = keyMemo.filter { !$0.key.hasPrefix(prefix) }
+        keyMemoInsertionOrder.removeAll { $0.hasPrefix(prefix) }
     }
 
     /// Try memory cache first, then disk cache.
@@ -195,19 +225,17 @@ final class ThumbnailCache {
         }
     }
 
-    /// Drop memory + disk cache entries for a deleted file.
+    /// Drop memory + disk cache entries for a deleted file, and invalidate
+    /// the path's memo entries so a future file at the same path can never
+    /// inherit this key.
     func remove(for url: URL) {
         let key = cacheKey(for: url)
         lock.lock()
+        defer { lock.unlock() }
         memoryCache.removeValue(forKey: key)
         unlinkLRUNode(key)
         failedKeys.remove(key)
-        lock.unlock()
-        // Memo entries are keyed "path|mtime": purge every entry for this
-        // path (a bare-path lookup would never hit).
-        let prefix = url.path + "|"
-        keyMemo = keyMemo.filter { !$0.key.hasPrefix(prefix) }
-        keyMemoInsertionOrder.removeAll { $0.hasPrefix(prefix) }
+        invalidateMemos(forPath: url.path)
         try? FileManager.default.removeItem(at: cacheDir.appendingPathComponent("\(key).png"))
     }
 

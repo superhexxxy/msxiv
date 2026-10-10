@@ -3,6 +3,9 @@ import CoreServices
 
 class FileWatcher {
     private var stream: FSEventStreamRef?
+    /// Opaque pointer handed to FSEventStreamContext (see `makeContext()`):
+    /// retained for the stream's whole lifetime, released in `stopStream()`.
+    private var contextInfo: UnsafeMutableRawPointer?
     /// Directory currently covered by the live stream.
     private var watchedDir: String?
     /// The file whose modifications should trigger a reload (nil = ignore all).
@@ -28,7 +31,11 @@ class FileWatcher {
     /// navigating within the same folder: `loadImage()` no longer tears down
     /// and re-creates a kernel stream on every keypress — switching images
     /// just swaps the target path.
+    ///
+    /// Must be called from the main thread (the stream is scheduled on the
+    /// main dispatch queue; mutating its bookkeeping off-main would race).
     func watch(file url: URL, onModify: @escaping () -> Void) {
+        assert(Thread.isMainThread, "FileWatcher.watch must run on the main thread")
         self.onModify = onModify
         self.currentPath = url.path
 
@@ -40,25 +47,30 @@ class FileWatcher {
         stopStream()
         watchedDir = dir
 
-        var context = FSEventStreamContext(
-            version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil,
-            release: nil,
-            copyDescription: nil
-        )
+        var context = makeContext()
 
         let callback: FSEventStreamCallback = { (_, clientCallBackInfo, numEvents, eventPaths, eventFlags, _) in
             guard let info = clientCallBackInfo else { return }
             let watcher = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
             guard let watched = watcher.currentPath else { return }
 
-            // With UseCFTypes, eventPaths is a CFArray of CFString paths.
-            let paths = unsafeBitCast(eventPaths, to: NSArray.self) as! [String]
+            // With kFSEventStreamCreateFlagUseCFTypes, `eventPaths` is a
+            // CFArray of CFString paths (typed `UnsafeRawPointer?` in the
+            // Swift overlay). Bridge it safely through CFArray instead of
+            // `unsafeBitCast(..., to: NSArray.self) as! [String]`: the old
+            // double-cast was an unchecked bit-reinterpret plus a forced
+            // downcast that would trap on any unexpected element type.
+            guard numEvents > 0, let pathsPtr = eventPaths else { return }
+            let cfPaths = Unmanaged<CFArray>.fromOpaque(pathsPtr).takeUnretainedValue()
+            let count = min(Int(numEvents), cfPaths.count)
+            guard count > 0 else { return }
 
-            for i in 0..<numEvents {
-                guard i < paths.count else { continue }
-                if FileWatcher.shouldReload(eventPath: paths[i], flags: eventFlags[i], watchedPath: watched) {
+            for i in 0..<count {
+                // Element type is guaranteed CFString by UseCFTypes; use a
+                // conditional cast so anything unexpected is skipped rather
+                // than crashing the app from a system callback.
+                guard let path = cfPaths[i] as? String else { continue }
+                if FileWatcher.shouldReload(eventPath: path, flags: eventFlags[i], watchedPath: watched) {
                     DispatchQueue.main.async {
                         watcher.onModify?()
                     }
@@ -84,6 +96,26 @@ class FileWatcher {
         }
     }
 
+    /// Build the FSEventStreamContext with a properly managed `info` pointer.
+    ///
+    /// The old code used `Unmanaged.passUnretained(self)` with `release: nil`,
+    /// which is only safe while the watcher outlives the stream. Here we take
+    /// an explicit +1 retain instead, so even if CoreServices kept the context
+    /// alive past our last `stopStream()` call, the callback could never touch
+    /// a dangling pointer. The matching release happens in `stopStream()`,
+    /// after the stream has been invalidated (no callbacks can run after that).
+    private func makeContext() -> FSEventStreamContext {
+        let ptr = Unmanaged.passRetained(self).toOpaque()
+        contextInfo = ptr
+        return FSEventStreamContext(
+            version: 0,
+            info: ptr,
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+    }
+
     func stop() {
         stopStream()
         watchedDir = nil
@@ -99,8 +131,15 @@ class FileWatcher {
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
         }
-        stream = nil
+        self.stream = nil
         currentPath = nil
+        // Balance the +1 retain from `makeContext()`. Safe here because the
+        // stream was just invalidated: no further callbacks will dereference
+        // the pointer.
+        if let info = contextInfo {
+            Unmanaged<FileWatcher>.fromOpaque(info).release()
+            contextInfo = nil
+        }
     }
 
     deinit {

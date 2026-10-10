@@ -15,6 +15,12 @@ enum AppAction {
 class ImageView: NSView {
     static let statusBarHeight: CGFloat = 22
 
+    /// Honor the `status_bar` config option (AppConfig.statusBar): when false,
+    /// no status bar is drawn and layout reserves nothing for it. Set once by
+    /// AppWindow at view creation; reads happen only on the main thread during
+    /// drawing/layout, so a plain var is safe here.
+    var showsStatusBar = true
+
     // Redraws are coalesced via needsDisplay = true: a change that lands while
     // the view is already dirty skips redundant display-cycle scheduling.
     var image: CGImage? { didSet { needsDisplay = true } }
@@ -65,8 +71,9 @@ class ImageView: NSView {
         guard let image = image else { return }
         
         ctx.saveGState()
-        // Center in the area ABOVE the status bar so the bar never covers pixels.
-        let barH = ImageView.statusBarHeight
+        // Center in the area ABOVE the status bar so the bar never covers
+        // pixels (full height when the bar is hidden via status_bar=false).
+        let barH = showsStatusBar ? ImageView.statusBarHeight : 0
         ctx.translateBy(x: bounds.midX, y: barH + (bounds.height - barH) / 2)
         ctx.rotate(by: rotation * .pi / 180.0)
         ctx.scaleBy(x: zoom, y: zoom)
@@ -82,7 +89,10 @@ class ImageView: NSView {
             ctx.fill(NSRect(x: 8, y: bounds.height - 18, width: 10, height: 10))
         }
         
-        // --- Draw Status Bar (or red confirm bar) ---
+        // --- Draw Status Bar (or red confirm bar) — skipped entirely when
+        // the user disabled it via `status_bar = false`. (GState is already
+        // balanced by the restoreGState above; no extra restore here.) ---
+        guard showsStatusBar else { return }
         let barHeight: CGFloat = ImageView.statusBarHeight
         let barRect = NSRect(x: 0, y: 0, width: bounds.width, height: barHeight)
         let infoText: String
