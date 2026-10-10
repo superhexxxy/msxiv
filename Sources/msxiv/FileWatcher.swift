@@ -55,22 +55,18 @@ class FileWatcher {
             guard let watched = watcher.currentPath else { return }
 
             // With kFSEventStreamCreateFlagUseCFTypes, `eventPaths` is a
-            // CFArray of CFString paths (typed `UnsafeRawPointer?` in the
-            // Swift overlay). Bridge it safely through CFArray instead of
-            // `unsafeBitCast(..., to: NSArray.self) as! [String]`: the old
-            // double-cast was an unchecked bit-reinterpret plus a forced
-            // downcast that would trap on any unexpected element type.
-            guard numEvents > 0, let pathsPtr = eventPaths else { return }
-            let cfPaths = Unmanaged<CFArray>.fromOpaque(pathsPtr).takeUnretainedValue()
-            let count = min(Int(numEvents), cfPaths.count)
+            // CFArray of CFString paths. Bridge it to NSArray with a
+            // conditional downcast: safe against any unexpected element type
+            // (skipped via nil-coalescing instead of trapping), using only
+            // API that exists on CFArray in the Swift overlay (it has neither
+            // `count` nor subscripting).
+            guard numEvents > 0 else { return }
+            let paths = (unsafeBitCast(eventPaths, to: NSArray.self) as? [String]) ?? []
+            let count = min(Int(numEvents), paths.count)
             guard count > 0 else { return }
 
             for i in 0..<count {
-                // Element type is guaranteed CFString by UseCFTypes; use a
-                // conditional cast so anything unexpected is skipped rather
-                // than crashing the app from a system callback.
-                guard let path = cfPaths[i] as? String else { continue }
-                if FileWatcher.shouldReload(eventPath: path, flags: eventFlags[i], watchedPath: watched) {
+                if FileWatcher.shouldReload(eventPath: paths[i], flags: eventFlags[i], watchedPath: watched) {
                     DispatchQueue.main.async {
                         watcher.onModify?()
                     }

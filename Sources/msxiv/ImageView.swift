@@ -90,9 +90,10 @@ class ImageView: NSView {
         }
         
         // --- Draw Status Bar (or red confirm bar) — skipped entirely when
-        // the user disabled it via `status_bar = false`. (GState is already
-        // balanced by the restoreGState above; no extra restore here.) ---
-        guard showsStatusBar else { return }
+        // the user disabled it via `status_bar = false`, except the
+        // delete-confirm prompt, which must stay visible to be answerable.
+        // (GState is already balanced by the restoreGState above.) ---
+        if confirmPrompt == nil && !showsStatusBar { return }
         let barHeight: CGFloat = ImageView.statusBarHeight
         let barRect = NSRect(x: 0, y: 0, width: bounds.width, height: barHeight)
         let infoText: String
@@ -121,9 +122,10 @@ class ImageView: NSView {
     
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        // Bottom status-bar strip: drag it to move the (titlebar-less) window.
+        // Bottom status-bar strip: drag it to move the (titlebar-less) window
+        // (only when the bar is actually shown).
         let p = convert(event.locationInWindow, from: nil)
-        if p.y < ImageView.statusBarHeight {
+        if showsStatusBar && p.y < ImageView.statusBarHeight {
             movingWindow = true
             lastMouseLocation = nil
             (window as? AppWindow)?.beginMoveDrag()

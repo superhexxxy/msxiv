@@ -24,6 +24,10 @@ class ThumbnailView: NSView {
     var defaultInfo: String = "" { didSet { needsDisplay = true } }
     var confirmPrompt: String? { didSet { needsDisplay = true } } // When set: red Y/N bar replaces the status bar
 
+    /// Honor the `status_bar` config option: when false, no bar is drawn and
+    /// layout reserves nothing for it. Set once by AppWindow at creation.
+    var showsStatusBar = true
+
     /// Cached attribute dicts: these were rebuilt per cell on every frame.
     private lazy var labelAttrs: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 9),
@@ -56,7 +60,7 @@ class ThumbnailView: NSView {
     private var labelHeight: CGFloat { 14 }
     private var labelGap: CGFloat { 6 }
     private var barHeight: CGFloat { 22 }
-    private var bottomReserve: CGFloat { barHeight + labelGap + labelHeight }
+    private var bottomReserve: CGFloat { (showsStatusBar ? barHeight : 0) + labelGap + labelHeight }
     
     func updateFrameHeight() {
         let totalHeight = CGFloat(rows) * cellSize + topPad + bottomReserve
@@ -145,6 +149,9 @@ class ThumbnailView: NSView {
         }
         
         // --- Draw Status Bar (or red confirm bar) ---
+        // Skipped when the bar is hidden, except the delete-confirm prompt,
+        // which must stay visible to be answerable.
+        if confirmPrompt == nil && !showsStatusBar { return }
         let barRect = NSRect(x: 0, y: 0, width: bounds.width, height: barHeight)
         let infoText: String
         if let prompt = confirmPrompt {
@@ -315,8 +322,9 @@ class ThumbnailView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
-        // Bottom strip is the status bar: drag it to move the window.
-        if point.y < barHeight {
+        // Bottom strip is the status bar: drag it to move the window
+        // (only when the bar is actually shown).
+        if showsStatusBar && point.y < barHeight {
             movingWindow = true
             (window as? AppWindow)?.beginMoveDrag()
             return
