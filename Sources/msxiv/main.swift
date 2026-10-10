@@ -231,9 +231,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         decodingInFlight[url.path] = token
 
         // Decode off the main thread so the UI stays responsive on huge images.
-        let op = BlockOperation { [weak self] in
-            guard let self = self else { return }
-            if op.isCancelled {
+        // The block is attached after init so it can reference its own
+        // operation (weakly — no retain cycle) for cooperative cancellation.
+        let op = BlockOperation()
+        op.addExecutionBlock { [weak self, weak op] in
+            guard let self = self, let operation = op else { return }
+            if operation.isCancelled {
                 DispatchQueue.main.async {
                     if self.decodingInFlight[url.path] == token {
                         self.decodingInFlight[url.path] = nil
@@ -248,14 +251,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.decodingInFlight[url.path] = nil
                 }
                 guard self.loadToken == token else { return }
-                if self.foregroundOp === op { self.foregroundOp = nil }
+                if self.foregroundOp === operation { self.foregroundOp = nil }
                 self.applyLoadedImage(decoded, url: url, token: token,
                                       keepViewTransform: keepViewTransform)
             }
         }
-        op.queuePriority = .userInteractive
+        op.queuePriority = .veryHigh
         foregroundOp = op
-        decodePool.addOperation(op)
+        Self.decodePool.addOperation(op)
         updatePrefetchWindow(around: index)
     }
     /// Path -> token of the decode currently running for that file, so a
@@ -267,7 +270,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                   keepViewTransform: Bool = false) {
         guard loadToken == token else { return }
         if let decoded = decoded {
-            let iv = window.imageView
+            guard let iv = window.imageView else { return }
             iv.image = decoded.cgImage
             iv.nsImage = decoded.nsImage
             iv.nativeSize = CGSize(width: decoded.nativeWidth, height: decoded.nativeHeight)
@@ -326,9 +329,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // the block synchronously on another thread, and the foreground
             // path relies on this entry existing the moment we return.
             decodingInFlight[url.path] = 0  // 0 never equals a real token
-            let op = BlockOperation { [weak self] in
-                guard let self = self else { return }
-                if op.isCancelled {
+            let op = BlockOperation()
+            op.addExecutionBlock { [weak self, weak op] in
+                guard let self = self, let operation = op else { return }
+                if operation.isCancelled {
                     DispatchQueue.main.async {
                         self.forgetPrefetch(n, url: url)
                         // Hand the slot back unless someone (a foreground
@@ -339,14 +343,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     return
                 }
-                // The user moved onto this file: the foreground owns it now
-                // (it stamped its own token into decodingInFlight) — stand
-                // down instead of duplicating the decode.
-                if self.imageStore.currentFile?.path == url.path,
-                   self.decodingInFlight[url.path] != 0 {
-                    DispatchQueue.main.async { self.forgetPrefetch(n, url: url) }
-                    return
-                }
+                // NOTE: no freshness check here — this block runs on the
+                // pool thread and must not touch main-thread-owned store
+                // state (data race). The main-thread completion below owns
+                // all freshness decisions; a redundant decode is harmless.
                 let img = ImageDecoder.decodeForDisplay(from: url, capPixels: cap)
                 DispatchQueue.main.async {
                     self.forgetPrefetch(n, url: url)
@@ -355,7 +355,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     if self.decodingInFlight[url.path] == 0 {
                         self.decodingInFlight[url.path] = nil
                     }
-                    if op.isCancelled { return }
+                    if operation.isCancelled { return }
                     // Keep it only while we're still viewing one of its
                     // neighbors and nobody filled this slot meanwhile.
                     let cur = self.imageStore.currentIndex
@@ -365,9 +365,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
-            op.queuePriority = .background
+            op.queuePriority = .low
             prefetchOps[n] = (url, op)
-            decodePool.addOperation(op)
+            Self.decodePool.addOperation(op)
         }
     }
     private var prefetchInFlight: Set<Int> = []

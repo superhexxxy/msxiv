@@ -1,5 +1,7 @@
 import Foundation
 import CoreGraphics
+import ImageIO
+import AppKit
 
 /// A decoded image plus everything needed to draw it *without* ever
 /// allocating a full-size RGBA buffer.
