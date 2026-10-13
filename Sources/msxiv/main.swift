@@ -1,5 +1,15 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
+
+/// Directory-scan extension list shared by ImageStore and the CLI arg filter:
+/// common web/photo formats PLUS every camera RAW extension (NRAW).
+let msxivValidExtensions: Set<String> = {
+    var s: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "heic", "avif",
+                          "bmp", "tiff", "tif"]
+    s.formUnion(RawSupport.allExtensions)
+    return s
+}()
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: AppWindow!

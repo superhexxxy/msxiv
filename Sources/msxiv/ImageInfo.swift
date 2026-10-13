@@ -23,7 +23,13 @@ struct ImageInfo {
     /// EXIF DateTimeOriginal ("2026:09:23 22:14:52") -> "2026-09-23",
     /// falling back to the file modification date.
     static func photoDate(for url: URL) -> String? {
-        if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+        // RAW containers need the same UTI hint ImageIO requires for decoding,
+        // otherwise their EXIF block is invisible to a property read.
+        var sourceOptions: [CFString: Any] = [:]
+        if RawSupport.isRawFile(at: url), let hint = RawSupport.typeHint(for: url) {
+            sourceOptions[kCGImageSourceTypeIdentifierHint] = hint
+        }
+        if let src = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
            let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any],
            let raw = exif[kCGImagePropertyExifDateTimeOriginal] as? String {

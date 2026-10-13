@@ -153,35 +153,54 @@ final class ThumbnailCache {
     /// them); completion is delivered on the main thread, possibly several
     /// times if prewarm runs again while an earlier batch is still going —
     /// callers must treat it as "cache got warmer", not "all done".
+    ///
+    /// The disk probe itself now runs *in parallel* across the concurrent
+    /// pool (bounded by `ioSemaphore`): a folder with thousands of cached
+    /// thumbnails used to warm one-at-a-time, where each iteration paid a
+    /// serial round-trip to storage. Fan-out turns that wall-clock time into
+    /// roughly (total / concurrency).
     func prewarm(files: [URL], maxSize: Int, completion: @escaping () -> Void) {
         guard !files.isEmpty else {
             DispatchQueue.main.async { completion() }
             return
         }
-        genQueue.async { [weak self] in
+        genQueue.async(group: nil) { [weak self] in
             guard let self = self else { return }
             // Snapshot keys off-main; stat cost is O(n) cheap syscalls.
             var keys: [(String, URL)] = []
             keys.reserveCapacity(files.count)
             for f in files { keys.append((self.cacheKey(for: f), f)) }
 
-            var loaded = 0
+            // Parallelize the disk probes. A dispatch group keeps the final
+            // "cache warmed" callback honest; periodic progress callbacks
+            // keep the grid painting warm cells as they land.
+            let group = DispatchGroup()
+            var loadedCounter = 0
             for (key, _) in keys {
                 // Skip work if the entry is already resident.
                 self.lock.lock()
                 let have = self.memoryCache[key] != nil
                 self.lock.unlock()
                 if have { continue }
-                if self.loadDiskThumbnail(forKey: key) != nil {
-                    loaded += 1
-                    // Refresh the view periodically so cells appear as they
-                    // warm instead of all at the very end.
-                    if loaded % 48 == 0 {
-                        DispatchQueue.main.async { completion() }
+                group.enter()
+                self.genQueue.async {
+                    defer { group.leave() }
+                    if self.loadDiskThumbnail(forKey: key) != nil {
+                        self.lock.lock()
+                        loadedCounter += 1
+                        let n = loadedCounter
+                        self.lock.unlock()
+                        // Refresh the view periodically so cells appear as they
+                        // warm instead of all at the very end.
+                        if n % 48 == 0 {
+                            DispatchQueue.main.async { completion() }
+                        }
                     }
                 }
             }
-            DispatchQueue.main.async { completion() }
+            group.notify(queue: self.genQueue) {
+                DispatchQueue.main.async { completion() }
+            }
         }
     }
 
@@ -219,6 +238,16 @@ final class ThumbnailCache {
         if inflightKeys.contains(key) {
             inflightWaiters[key, default: []].append(completion)
             lock.unlock()
+            return
+        }
+        // Memory hit: skip the whole generation pipeline and the concurrency
+        // semaphore entirely — a warm thumbnail is served instantly (still
+        // async, so callers keep their "completion off the caller stack"
+        // contract).
+        if let img = memoryCache[key] {
+            touchLRU(key)
+            lock.unlock()
+            DispatchQueue.main.async { completion(img) }
             return
         }
         inflightKeys.insert(key)
