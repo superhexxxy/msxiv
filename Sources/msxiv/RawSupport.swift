@@ -94,14 +94,18 @@ enum RawSupport {
         return UTType(filenameExtension: url.pathExtension.lowercased())
     }
 
+    /// System-declared camera RAW type. Nil only if Launch Services ever
+    /// drops the identifier; every call site treats nil as "not RAW".
+    static let cameraRawType: UTType? = UTType("public.camera-raw-image")
+
     /// True when the file is recognized as a camera RAW container — either by
     /// its extension list above or because Launch Services classifies it as a
     /// subtype of `public.camera-raw-image` (catches exotic extensions we
     /// don't list, e.g. a renamed .orf or vendor-specific types).
     static func isRawFile(at url: URL) -> Bool {
         if isRawExtension(url.pathExtension) { return true }
-        guard let t = uti(of: url) else { return false }
-        return t.conforms(to: .init(identifier: "public.camera-raw-image"))
+        guard let t = uti(of: url), let base = cameraRawType else { return false }
+        return t.conforms(to: base)
     }
 
     /// Type-identifier hint for ImageIO. Passing this makes CGImageSource
@@ -140,15 +144,30 @@ enum RawSupport {
         // any copy of the buffer.
         return d.withUnsafeBytes { raw -> EmbeddedJPEG? in
             let p = raw.bindMemory(to: UInt8.self)
+            // Explicit locals: the chained-ternary form blows up the
+            // type-checker (expression too complex), and spelled-out math
+            // can't hide an overflow.
             func u16(_ o: Int, be: Bool) -> Int? {
                 guard o >= 0, o + 2 <= n else { return nil }
-                return be ? (Int(p[o]) << 8) | Int(p[o + 1])
-                          : (Int(p[o + 1]) << 8) | Int(p[o])
+                let b0: Int = Int(p[o])
+                let b1: Int = Int(p[o + 1])
+                if be {
+                    return (b0 << 8) | b1
+                } else {
+                    return (b1 << 8) | b0
+                }
             }
             func u32(_ o: Int, be: Bool) -> Int? {
                 guard o >= 0, o + 4 <= n else { return nil }
-                return be ? (Int(p[o]) << 24) | (Int(p[o+1]) << 16) | (Int(p[o+2]) << 8) | Int(p[o+3])
-                          : (Int(p[o+3]) << 24) | (Int(p[o+2]) << 16) | (Int(p[o+1]) << 8) | Int(p[o])
+                let b0: Int = Int(p[o])
+                let b1: Int = Int(p[o + 1])
+                let b2: Int = Int(p[o + 2])
+                let b3: Int = Int(p[o + 3])
+                if be {
+                    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+                } else {
+                    return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
+                }
             }
             func isSOI(_ o: Int) -> Bool {
                 o >= 0 && o + 2 <= n && p[o] == 0xFF && p[o + 1] == 0xD8
@@ -161,6 +180,12 @@ enum RawSupport {
             func walkIFD(_ ifd: Int, be: Bool, depth: Int) {
                 guard depth < 4, let count = u16(ifd, be: be), count < 1024 else { return }
                 guard ifd + 2 + count * 12 + 4 <= n else { return }
+                // Standard EXIF thumbnail/preview pair: 0x0201 = JPEG offset,
+                // 0x0202 = byte length (SHORT or LONG, inline when count == 1).
+                // This is how most cameras reference their full-size preview
+                // (verified on Nikon NRW: 1.8MB JPEG via SubIFD).
+                var jpegOff: Int?
+                var jpegLen: Int?
                 for e in 0..<count {
                     let entry = ifd + 2 + e * 12
                     guard let tag = u16(entry, be: be),
@@ -171,15 +196,28 @@ enum RawSupport {
                     if tag == 0x014A, comp == 4 { // SubIFD pointer(s)
                         if len == 1, let sub = u32(valueField, be: be) {
                             walkIFD(sub, be: be, depth: depth + 1)
-                        } else if len > 1, let arrOff = u32(valueField, be: be),
-                                  arrOff + len * 4 <= n {
-                            for k in 0..<min(len, 8) {
-                                if let sub = u32(arrOff + k * 4, be: be) {
-                                    walkIFD(sub, be: be, depth: depth + 1)
+                        } else if len > 1, let arrOff = u32(valueField, be: be) {
+                            // Cap BEFORE multiplying: a malformed count must
+                            // never drive integer arithmetic into a trap, and
+                            // only the first few SubIFDs are ever followed.
+                            let take = min(len, 8)
+                            if arrOff >= 0, take * 4 <= n - arrOff {
+                                for k in 0..<take {
+                                    if let sub = u32(arrOff + k * 4, be: be) {
+                                        walkIFD(sub, be: be, depth: depth + 1)
+                                    }
                                 }
                             }
                         }
                         continue
+                    }
+
+                    // Standard preview pair: SHORT values live in the first
+                    // 2 bytes of the field on both endiannesses; LONG inline.
+                    if tag == 0x0201, (comp == 3 || comp == 4), len == 1 {
+                        jpegOff = comp == 3 ? u16(valueField, be: be) : u32(valueField, be: be)
+                    } else if tag == 0x0202, (comp == 3 || comp == 4), len == 1 {
+                        jpegLen = comp == 3 ? u16(valueField, be: be) : u32(valueField, be: be)
                     }
 
                     // JPEG-compressed data (TIFF component type 6): the
@@ -189,14 +227,23 @@ enum RawSupport {
                     let off: Int?
                     if len <= 4 {
                         off = u32(valueField, be: be) // inline value
+                    } else if let o = u32(valueField, be: be), o >= 0, len <= n - o {
+                        // Overflow-safe bounds check: both sides are
+                        // non-negative and bounded by the file size.
+                        off = o
                     } else {
-                        let o = u32(valueField, be: be)
-                        off = (o != nil && o! + len <= n) ? o : nil
+                        off = nil
                     }
                     guard let off = off, isSOI(off) else { continue }
                     if best == nil || len > best!.length {
                         best = EmbeddedJPEG(offset: off, length: len)
                     }
+                }
+                // Evaluate the standard preview pair for this IFD (may live
+                // in the top-level IFD or any SubIFD — largest wins overall).
+                if let o = jpegOff, let l = jpegLen, l > 100, o >= 0, l <= n - o,
+                   isSOI(o), best == nil || l > best!.length {
+                    best = EmbeddedJPEG(offset: o, length: l)
                 }
             }
 
@@ -210,7 +257,7 @@ enum RawSupport {
             // image directory offset/length pair.
             else if n > 40, p[0] == 0x46, p[1] == 0x49, p[2] == 0x48, p[3] == 0x52 {
                 if let imgOff = u32(32, be: false), let imgLen = u32(36, be: false),
-                   imgLen > 100, imgOff + imgLen <= n, isSOI(imgOff) {
+                   imgLen > 100, imgOff >= 0, imgLen <= n - imgOff, isSOI(imgOff) {
                     best = EmbeddedJPEG(offset: imgOff, length: imgLen)
                 }
             }

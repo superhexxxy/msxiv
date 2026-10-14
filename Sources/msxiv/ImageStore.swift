@@ -100,7 +100,9 @@ class ImageStore {
     /// the fast list (renamed RAW, exotic vendor formats…).
     private static func isImageUTI(_ url: URL) -> Bool {
         guard let t = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else { return false }
-        return t.conforms(to: .image) || t.conforms(to: UTType(identifier: "public.camera-raw-image"))
+        if t.conforms(to: .image) { return true }
+        guard let base = RawSupport.cameraRawType else { return false }
+        return t.conforms(to: base)
     }
 
     private static func statInfo(of url: URL) -> StatInfo {

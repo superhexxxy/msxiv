@@ -11,13 +11,6 @@ let msxivValidExtensions: Set<String> = {
     return s
 }()
 
-/// Launch Services image probe for files whose extension isn't on the fast
-/// list (renamed RAW, exotic vendor formats…).
-func msxivIsImageURL(_ url: URL) -> Bool {
-    guard let t = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else { return false }
-    return t.conforms(to: .image) || t.conforms(to: UTType(identifier: "public.camera-raw-image"))
-}
-
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: AppWindow!
     var imageStore: ImageStore!

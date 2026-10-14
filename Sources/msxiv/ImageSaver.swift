@@ -6,9 +6,13 @@ import CoreGraphics
 /// (JPEG q0.95, others native) via a temp file + atomic replace.
 struct ImageSaver {
     /// Rotate the file on disk 90° CW `turns` times. Returns false on failure.
+    /// Camera RAW files are refused: re-encoding would replace the RAW
+    /// container with a JPEG under the same extension, bricking the file
+    /// for every RAW decoder. (Callers already flash "Save failed".)
     static func rotateCW(_ url: URL, quarterTurns: Int) -> Bool {
         let turns = ((quarterTurns % 4) + 4) % 4
         guard turns != 0 else { return true }
+        guard !RawSupport.isRawFile(at: url) else { return false }
         // RAW magic: hint ImageIO with the file's UTI so camera RAW containers
         // are readable at all (same trick as the decode paths).
         var sourceOptions: [CFString: Any] = [:]
